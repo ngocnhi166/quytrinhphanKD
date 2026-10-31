@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="vi"><meta charset="utf-8"><title>T12 Studio</title>
+<style>body{width:310px;padding:22px;font:14px/1.6 system-ui;color:#203b34;background:#f7faf8}h2{margin:0}p{color:#64776d}input,button{box-sizing:border-box;width:100%;padding:12px;border:1px solid #ccd9d0;border-radius:9px}button{background:#275b48;color:white;margin:12px 0;cursor:pointer}#status{font-size:12px}</style>
+<h2>✳ T12 Studio</h2><p>Bấm Mở tool để sử dụng. Bấm Đóng tool để ngắt kết nối và dừng lượt đang chạy. Không cần nhập mã.</p>
+<button id="connect">Mở tool</button><button id="disconnect">Đóng tool</button><div id="status" role="status">Đang kiểm tra…</div>
+<button id="diagnose">Kiểm tra tab ChatGPT đang mở</button><textarea id="diagnostic" readonly hidden style="width:100%;height:160px" aria-label="Thông tin chẩn đoán"></textarea><a id="download-report" hidden>Tải thông tin chẩn đoán</a>
+<script src="popup.js"></script></html>
