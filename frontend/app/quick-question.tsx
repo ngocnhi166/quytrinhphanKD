@@ -1,18 +1,15 @@
 "use client";
 import { useState } from "react";
+import { Job, send } from "./lib";
 
-export default function QuickQuestion({ connected, onCreated }: { connected: boolean; onCreated: (id: string) => void }) {
+export default function QuickQuestion({ taskId, ready, onCreated }: { taskId: string; ready: boolean; onCreated: (id: string) => void }) {
   const [question, setQuestion] = useState("Thủ đô của Việt Nam là gì?");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  async function send() {
+  async function ask() {
     setBusy(true); setError("");
-    try {
-      const response = await fetch("/api/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: question }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Không gửi được câu hỏi.");
-      onCreated(data.id);
-    } catch (e) { setError((e as Error).message); }
+    try { onCreated((await send<Job>("/search", "POST", { prompt: question, task_id: taskId })).id); }
+    catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
   return <section className="card input-card">
@@ -21,7 +18,6 @@ export default function QuickQuestion({ connected, onCreated }: { connected: boo
     <textarea id="quick-question" value={question} onChange={e => setQuestion(e.target.value)} maxLength={4000}/>
     <p className="fine-print">Chỉ gửi câu hỏi đơn giản. Không cần tải tệp hoặc phân tích dữ liệu.</p>
     {error && <p className="alert error" role="alert">{error}</p>}
-    <div className="input-footer"><button className="primary" onClick={send} disabled={!connected || busy || !question.trim()}>{busy ? "Đang gửi…" : "Gửi câu hỏi →"}</button></div>
-    {!connected && <p className="fine-print">Kết nối extension trước khi gửi câu hỏi.</p>}
+    <div className="input-footer"><button className="primary" onClick={ask} disabled={!ready || busy || !question.trim()}>{busy ? "Đang gửi…" : "Gửi câu hỏi →"}</button></div>
   </section>;
 }

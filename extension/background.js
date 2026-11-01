@@ -113,6 +113,15 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     respond({ ok: true });
     return;
   }
+  if (msg.type === "reveal") {
+    // The reply is only fully rendered in a visible tab; finish() returns to the website after saving.
+    if (sender.id === chrome.runtime.id && sender.tab?.id === active?.tabId && msg.id === active?.id) {
+      chrome.tabs.update(active.tabId, { active: true }).catch(() => {});
+      status("Đang hiển thị tab ChatGPT để lấy đủ nội dung…");
+    }
+    respond({ ok: true });
+    return;
+  }
   if (msg.type === "analysis-progress") {
     if (sender.id === chrome.runtime.id && sender.tab?.id === active?.tabId && msg.id === active?.id && socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "progress", id: msg.id, text: msg.text }));

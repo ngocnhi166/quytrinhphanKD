@@ -68,25 +68,43 @@
     // Confirm submission, but never automatically click again: that could duplicate a request.
     await wait(() => conversation.submitted(before, initialURL, globalThis.T12Composer.editor()),
     90000, "Đã bấm gửi nhưng chưa thấy ChatGPT nhận yêu cầu. Kiểm tra thông báo trên tab; extension không tự gửi lại để tránh trùng.");
-    let lastText = "", stableSince = Date.now(), lastProgress = 0, published = "";
-    return await wait(() => {
-      const last = conversation.latest(before);
-      if (!last) return null;
-      const text = conversation.text(last);
-      // Publish partial text without declaring completion or closing the tab.
-      if (text && text !== published && Date.now() - lastProgress > 1500) {
-        lastProgress = Date.now(); published = text;
-        chrome.runtime.sendMessage({ type: "analysis-progress", id: job.id, text }).catch(() => {});
-      }
-      if (text !== lastText || stopping()) { lastText = text; stableSince = Date.now(); return null; }
-      const turn = last.closest("article,[data-testid^='conversation-turn']") || last;
-      if (text && conversation.completed(turn) && Date.now() - stableSince > 2000) return { text, html: globalThis.T12Report.capture(last) };
-      // Quick questions have no file/tool workflow. Accept a new stable reply even
-      // if the UI no longer exposes the response footer, while retaining tool safeguards for analysis.
-      if (job.mode === "simple" && text && !stopping() && Date.now() - stableSince > 8000 &&
-          !turn.querySelector("[aria-busy='true'],[data-is-streaming='true']")) return { text, html: globalThis.T12Report.capture(last) };
-      return null;
-    }, job.mode === "simple" ? 120000 : 720000, "Chưa xác nhận được ChatGPT trả lời xong. Tab được giữ lại để kiểm tra.");
+    let lastText = "", stableSince = Date.now(), lastProgress = 0, published = "", revealed = false;
+    // ChatGPT reveals streamed words on animation frames, which never run in a background
+    // tab: the turn can report complete while its text is still partial. Only read it while
+    // visible, and only after it has stayed unchanged since becoming visible.
+    const restart = () => { stableSince = Date.now(); };
+    document.addEventListener("visibilitychange", restart);
+    try {
+      return await wait(() => {
+        const last = conversation.latest(before);
+        if (!last) return null;
+        const text = conversation.text(last);
+        // Publish partial text without declaring completion or closing the tab.
+        if (text && text !== published && Date.now() - lastProgress > 1500) {
+          lastProgress = Date.now(); published = text;
+          chrome.runtime.sendMessage({ type: "analysis-progress", id: job.id, text }).catch(() => {});
+        }
+        if (text !== lastText || stopping()) { lastText = text; stableSince = Date.now(); return null; }
+        const turn = last.closest("article,[data-testid^='conversation-turn']") || last;
+        const done = text && conversation.completed(turn) && Date.now() - stableSince > 2000 ||
+          // Quick questions have no file/tool workflow. Accept a new stable reply even
+          // if the UI no longer exposes the response footer, while retaining tool safeguards for analysis.
+          job.mode === "simple" && text && !stopping() && Date.now() - stableSince > 8000 &&
+            !turn.querySelector("[aria-busy='true'],[data-is-streaming='true']");
+        if (!done) return null;
+        // ChatGPT replaces a failed reply with a short notice; never save it as an answer.
+        if (text.length < 200 && /^(Không thể tải phản hồi này|Đã xảy ra lỗi|Unable to load (this )?response|Something went wrong)/i.test(text)) {
+          throw new Error(`ChatGPT báo lỗi: ${text}`);
+        }
+        if (document.hidden) {
+          if (!revealed) { revealed = true; chrome.runtime.sendMessage({ type: "reveal", id: job.id }).catch(() => {}); }
+          return null;
+        }
+        return { text, html: globalThis.T12Report.capture(last) };
+      }, job.mode === "simple" ? 120000 : 720000, "Chưa xác nhận được ChatGPT trả lời xong. Tab được giữ lại để kiểm tra; nếu cửa sổ trình duyệt bị thu nhỏ, hãy mở lại cửa sổ đó trong lúc phân tích.");
+    } finally {
+      document.removeEventListener("visibilitychange", restart);
+    }
   }
   chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     if (msg.type === "abort") { aborted = true; return; }

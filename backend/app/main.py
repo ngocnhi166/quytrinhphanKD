@@ -2,46 +2,25 @@ import asyncio
 import base64
 import json
 import secrets
-import sqlite3
 import time
 import uuid
 import re
-from contextlib import asynccontextmanager, contextmanager
-from pathlib import Path
+from contextlib import asynccontextmanager
+from html import escape
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
-from .data import MAX_BYTES, parse_file
+from . import access
+from .access import allow, audit, read_upload, task_dataset, workable_task
+from .pdf import render_pdf
+from .store import DATA, connection, init_db
 
-DATA = Path(__file__).resolve().parents[1] / "data"
-DATA.mkdir(exist_ok=True)
 KEY_FILE = DATA / "bridge.key"
 if not KEY_FILE.exists():
     KEY_FILE.write_text(secrets.token_urlsafe(32), encoding="utf-8")
 BRIDGE_KEY = KEY_FILE.read_text(encoding="utf-8").strip()
-DB = DATA / "studio.sqlite3"
-
-
-@contextmanager
-def connection():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-with connection() as db:
-    db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, filename TEXT, status TEXT, prompt TEXT, summary TEXT, result TEXT, error TEXT, created REAL, updated REAL, raw BLOB)")
-    if "result_html" not in {row[1] for row in db.execute("PRAGMA table_info(jobs)")}:
-        db.execute("ALTER TABLE jobs ADD COLUMN result_html TEXT")
-    db.execute("UPDATE jobs SET status='failed', error='Backend khởi động lại. Hãy tạo lượt phân tích mới.' WHERE status IN ('queued','running')")
+init_db()
 
 
 def update(job_id, **fields):
@@ -55,6 +34,18 @@ def public(row):
     obj.pop("raw", None)
     obj["summary"] = json.loads(obj["summary"])
     return obj
+
+
+JOB_QUERY = "SELECT j.*, u.full_name AS owner, t.title AS task_title FROM jobs j LEFT JOIN users u ON u.id = j.user_id LEFT JOIN tasks t ON t.id = j.task_id"
+
+
+def job_scope(user):
+    # Run history per the T12 role matrix: tasks assigned to the employee, the manager's department, everything for Admin.
+    if user["role"] == "employee":
+        return "t.assignee_id = ?", (user["id"],)
+    if user["role"] == "manager":
+        return "t.department_id = ?", (user["department_id"],)
+    return "1 = 1", ()
 
 
 class Bridge:
@@ -112,6 +103,7 @@ async def lifespan(app):
 
 app = FastAPI(title="T12 Local Analysis", lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "testserver"])
+app.include_router(access.router)
 
 
 @app.middleware("http")
@@ -135,79 +127,140 @@ def pairing():
 
 
 @app.get("/api/jobs")
-def jobs():
+def jobs(task: str | None = None, user=Depends(allow("employee", "manager", "admin"))):
+    scope, args = job_scope(user)
+    if task:
+        scope, args = scope + " AND j.task_id = ?", (*args, task)
     with connection() as db:
-        rows = db.execute("SELECT * FROM jobs ORDER BY created DESC LIMIT 100").fetchall()
-    return [public(r) for r in rows]
+        rows = db.execute(f"{JOB_QUERY} WHERE {scope} ORDER BY j.created DESC LIMIT 100", args).fetchall()
+    # The list is polled; full results are loaded per job.
+    return [{k: v for k, v in public(r).items() if k not in ("result", "result_html")} for r in rows]
 
 
 @app.get("/api/jobs/{job_id}")
-def job(job_id: str):
+def job(job_id: str, request: Request, user=Depends(allow("employee", "manager", "admin"))):
+    scope, args = job_scope(user)
     with connection() as db:
-        row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        row = db.execute(f"{JOB_QUERY} WHERE j.id = ?", (job_id,)).fetchone()
+        if row and not db.execute(f"{JOB_QUERY} WHERE j.id = ? AND {scope}", (job_id, *args)).fetchone():
+            access.deny(user, request, "lượt chạy AI ngoài phạm vi", "Bạn không được xem lượt chạy AI này.")
     if not row:
         raise HTTPException(404, "Không tìm thấy lượt phân tích.")
     return public(row)
 
 
-async def read_upload(file):
-    raw = await file.read(MAX_BYTES + 1)
-    name = Path((file.filename or "data.csv").replace('\\', '/')).name
-    return name, raw, parse_file(name, raw)
+class RunEdit(BaseModel):
+    result: str = Field(min_length=1, max_length=500000)
+    html: str | None = Field(None, max_length=2000000)
+
+
+@app.patch("/api/jobs/{job_id}")
+def edit_job(job_id: str, body: RunEdit, request: Request, user=Depends(allow("employee"))):
+    # The AI draft is kept as returned; the assignee's corrected version (the report edited in place, and its
+    # text) is stored beside it, only before submit.
+    with connection() as db:
+        row = db.execute("SELECT task_id, status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Không tìm thấy lượt phân tích.")
+        if not row["task_id"]:
+            access.deny(user, request, "sửa lượt chạy không gắn tác vụ")
+        task = workable_task(db, user, row["task_id"], request)
+        if row["status"] != "succeeded":
+            raise HTTPException(409, "Chỉ chỉnh sửa được lượt chạy đã hoàn tất.")
+        db.execute("UPDATE jobs SET edited_result=?, edited_html=?, edited=? WHERE id=?", (body.result, body.html, time.time(), job_id))
+    audit(user, "run_edit", task["title"], f"{len(body.result)} ký tự")
+    return {"ok": True}
+
+
+@app.get("/api/jobs/{job_id}/pdf")
+def job_pdf(job_id: str, request: Request, user=Depends(allow("employee", "manager", "admin"))):
+    run = job(job_id, request, user)  # same visibility rules as viewing the run
+    if run["status"] != "succeeded":
+        raise HTTPException(409, "Chỉ xuất PDF cho lượt chạy đã hoàn tất.")
+    edited = bool(run["edited_html"] or run["edited_result"])
+    body = run["edited_html"] or (run["result_html"] if not run["edited_result"] else None) or f"<pre>{escape(run['edited_result'] or run['result'] or '')}</pre>"
+    data = f"{run['filename']} · {run['summary']['row_count']} dòng" if run["summary"]["columns"] else "Không dùng tệp dữ liệu"
+    meta = (f"<div class=\"t12-meta\"><h1>{escape(run['task_title'] or 'Kết quả chạy AI')}</h1>"
+            f"<p>Người chạy: {escape(run['owner'] or '—')} · Dữ liệu: {escape(data)} · Thời gian: {time.strftime('%H:%M %d/%m/%Y', time.localtime(run['created']))}</p>"
+            f"<p>Câu hỏi: {escape(run['prompt'])}</p><p>{'Bản đã được nhân viên chỉnh sửa' if edited else 'Bản AI trả về'}</p></div>")
+    pdf = render_pdf(meta + body)
+    audit(user, "run_export", run["task_title"] or "", f"PDF {'bản chỉnh sửa' if edited else 'bản AI'}")
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="phan-tich-{job_id[:8]}.pdf"'})
 
 
 @app.post("/api/preview")
-async def preview(file: UploadFile = File(...)):
+async def preview(file: UploadFile = File(...), user=Depends(allow("employee", "admin"))):
     _, _, summary = await read_upload(file)
     return summary
 
 
+async def start_job(user, task, name, raw, summary, prompt, source):
+    # source records where the data came from (task sample "dataset", "upload", or None) for the run history.
+    job_id, now = str(uuid.uuid4()), time.time()
+    with connection() as db:
+        db.execute("INSERT INTO jobs (id,filename,status,prompt,summary,result,error,created,updated,raw,user_id,task_id,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, name, "queued", prompt, json.dumps(summary, ensure_ascii=False), None, None, now, now, raw, user["id"], task["id"], source))
+        # A first run, or a rerun after G11 asked for revision, puts the task back in progress.
+        db.execute("UPDATE tasks SET status='in_progress', updated=? WHERE id=? AND status IN ('ready_for_analysis','needs_revision')", (now, task["id"]))
+    audit(user, "ai_run", task["title"], f"{name}: {prompt[:300]}")
+    await bridge.pump()
+    with connection() as db:
+        return public(db.execute(f"{JOB_QUERY} WHERE j.id = ?", (job_id,)).fetchone())
+
+
+def run_task(request, user, task_id):
+    # Every run belongs to a task the employee is assigned to and may still work on.
+    with connection() as db:
+        return workable_task(db, user, task_id, request)
+
+
+async def run_data(task, file, dataset_id):
+    # Sample datasets are granted per task; otherwise the assignee uploads the file.
+    if dataset_id:
+        with connection() as db:
+            return task_dataset(db, task["id"], dataset_id)
+    if not file:
+        raise HTTPException(422, "Chọn dữ liệu mẫu của tác vụ hoặc tải tệp lên.")
+    return await read_upload(file)
+
+
 @app.post("/api/jobs", status_code=201)
-async def create_job(file: UploadFile = File(...), prompt: str = Form(...)):
+async def create_job(request: Request, task_id: str = Form(...), prompt: str = Form(...), file: UploadFile | None = File(None), dataset_id: str | None = Form(None), user=Depends(allow("employee"))):
     if not prompt.strip() or len(prompt) > 12000:
         raise HTTPException(422, "Nhập yêu cầu phân tích từ 1 đến 12.000 ký tự.")
     if not bridge.socket:
         raise HTTPException(409, "Extension chưa kết nối. Mở phần Kết nối để thiết lập.")
-    name, raw, summary = await read_upload(file)
-    job_id, now = str(uuid.uuid4()), time.time()
-    with connection() as db:
-        db.execute("INSERT INTO jobs (id,filename,status,prompt,summary,result,error,created,updated,raw) VALUES (?,?,?,?,?,?,?,?,?,?)", (job_id, name, "queued", prompt.strip(), json.dumps(summary, ensure_ascii=False), None, None, now, now, raw))
-    await bridge.pump()
-    return job(job_id)
+    task = run_task(request, user, task_id)
+    name, raw, summary = await run_data(task, file, dataset_id)
+    return await start_job(user, task, name, raw, summary, prompt.strip(), "dataset" if dataset_id else "upload")
 
 
 class SimpleQuestion(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
+    task_id: str
 
 
 @app.post("/api/search", status_code=201)
-async def simple_question(body: SimpleQuestion):
+async def simple_question(body: SimpleQuestion, request: Request, user=Depends(allow("employee"))):
     prompt = body.prompt.strip()
     if not prompt:
         raise HTTPException(422, "Vui lòng nhập câu hỏi.")
     if not bridge.socket:
         raise HTTPException(409, "Extension chưa kết nối.")
+    task = run_task(request, user, body.task_id)
     summary = {"mode": "simple", "columns": [], "row_count": 0, "preview": [], "metrics": {}}
-    job_id, now = str(uuid.uuid4()), time.time()
-    with connection() as db:
-        db.execute("INSERT INTO jobs (id,filename,status,prompt,summary,result,error,created,updated,raw) VALUES (?,?,?,?,?,?,?,?,?,?)", (job_id, "Hỏi nhanh", "queued", prompt, json.dumps(summary), None, None, now, now, b""))
-    await bridge.pump()
-    return job(job_id)
+    return await start_job(user, task, "Hỏi nhanh", b"", summary, prompt, None)
 
 
 @app.post("/api/file-question", status_code=201)
-async def file_question(file: UploadFile = File(...), prompt: str = Form(...)):
+async def file_question(request: Request, task_id: str = Form(...), prompt: str = Form(...), file: UploadFile | None = File(None), dataset_id: str | None = Form(None), user=Depends(allow("employee"))):
     if not prompt.strip() or len(prompt) > 4000:
         raise HTTPException(422, "Nhập câu hỏi từ 1 đến 4.000 ký tự.")
     if not bridge.socket:
         raise HTTPException(409, "Extension chưa kết nối.")
-    name, raw, summary = await read_upload(file)
+    task = run_task(request, user, task_id)
+    name, raw, summary = await run_data(task, file, dataset_id)
     summary["mode"] = "simple"
-    job_id, now = str(uuid.uuid4()), time.time()
-    with connection() as db:
-        db.execute("INSERT INTO jobs (id,filename,status,prompt,summary,result,error,created,updated,raw) VALUES (?,?,?,?,?,?,?,?,?,?)", (job_id, name, "queued", prompt.strip(), json.dumps(summary, ensure_ascii=False), None, None, now, now, raw))
-    await bridge.pump()
-    return job(job_id)
+    return await start_job(user, task, name, raw, summary, prompt.strip(), "dataset" if dataset_id else "upload")
 
 
 @app.websocket("/api/bridge")

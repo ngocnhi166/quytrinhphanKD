@@ -67,6 +67,14 @@ test('receives result as a separate event without holding request channel open',
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(removed, [42]);
 });
+test('reveals only its own background tab so the full reply renders', async () => {
+  const { focused, dispatch } = await setup('event');
+  dispatch({ type: 'reveal', id: 'job-1' }, 99);
+  dispatch({ type: 'reveal', id: 'other-job' });
+  assert.deepEqual(focused, []);
+  dispatch({ type: 'reveal', id: 'job-1' });
+  assert.deepEqual(focused, [42]);
+});
 test('close tool disconnects and closes only its owned processing tab', async () => {
   const { ws, removed, control } = await setup('event');
   await control({ type: 'disconnect' });
