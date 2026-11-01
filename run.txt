@@ -1,0 +1,155 @@
+T12 STUDIO - THƯ VIỆN CẦN CÀI VÀ LỆNH CHẠY
+==========================================
+Thư mục dự án: D:\webNhi\quytrinhphanKD
+Mọi lệnh bên dưới chạy trong PowerShell, đứng tại thư mục dự án:
+    cd D:\webNhi\quytrinhphanKD
+
+
+1. PHẦN MỀM CẦN CÓ TRÊN MÁY
+---------------------------
+- Python 3.12 trở lên (đang dùng 3.13.7). Khi cài, tích "Add Python to PATH".
+    Kiểm tra:   py -3 --version
+- Node.js 22.13 trở lên hoặc 24 LTS (máy đang có 22.12.0: vẫn chạy được nhưng npm báo cảnh báo EBADENGINE).
+    Kiểm tra:   node -v
+                npm.cmd -v
+- Google Chrome hoặc Microsoft Edge 116 trở lên, đã đăng nhập ChatGPT (để cài extension).
+- Microsoft Edge (có sẵn trên Windows) hoặc Google Chrome: dùng để tạo file PDF khi bấm "Tải PDF".
+
+
+2. THƯ VIỆN BACKEND (PYTHON) - backend\requirements.txt
+-------------------------------------------------------
+Thư viện              Yêu cầu             Bản đã chạy thử
+fastapi               >=0.115,<1          0.162.0
+uvicorn[standard]     >=0.30,<1           0.54.0   (kèm websockets 17.4, httptools, watchfiles)
+python-multipart      >=0.0.18,<1         0.0.33
+openpyxl              >=3.1.5,<4          3.1.5
+httpx                 >=0.27,<1           0.28.1   (chỉ dùng cho kiểm thử)
+(pydantic 2.14.2 và starlette 1.10.0 được cài kèm fastapi)
+
+Lệnh cài (chỉ cần lần đầu):
+    py -3 -m venv .venv
+    .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+
+
+3. THƯ VIỆN FRONTEND (NODE.JS) - package.json
+---------------------------------------------
+Thư viện                  Yêu cầu     Bản đã chạy thử
+next                      16.4.3      16.4.3
+react                     19.3.0      19.3.0
+react-dom                 19.3.0      19.3.0
+typescript                ^5          5.9.3
+tailwindcss               ^4          4.3.3
+@tailwindcss/turbopack    ^4          4.3.3
+eslint                    ^9          9.39.5
+eslint-config-next        16.4.3      16.4.3
+@types/node               ^20         20.19.43
+@types/react              ^19         19.3.0
+@types/react-dom          ^19         19.3.0
+Font Lora được Next.js tự tải từ Google Fonts lần đầu chạy (cần mạng), sau đó phục vụ ngay từ web.
+
+Lệnh cài (chỉ cần lần đầu; cài đúng phiên bản trong package-lock.json):
+    npm.cmd ci
+Lưu ý: lần đầu tải khá lâu khi mạng chậm, cứ để chạy, đừng bấm Ctrl+C.
+
+
+4. EXTENSION CHROME/EDGE (không cần cài thư viện)
+-------------------------------------------------
+1) Mở chrome://extensions (hoặc edge://extensions).
+2) Bật "Developer mode / Chế độ nhà phát triển".
+3) Bấm "Load unpacked / Tải tiện ích đã giải nén" -> chọn thư mục:
+       D:\webNhi\quytrinhphanKD\extension
+4) Bấm biểu tượng T12 Studio trên thanh tiện ích -> "Mở tool".
+Mỗi khi mã extension thay đổi: bấm nút tải lại (Reload) của T12 Studio trong chrome://extensions.
+
+
+5. CHẠY ỨNG DỤNG (mở 2 terminal)
+--------------------------------
+Terminal 1 - backend (tự tạo .venv và cài thư viện còn thiếu nếu chưa có):
+    .\start-backend.cmd
+
+Terminal 2 - frontend (tự chạy npm ci nếu chưa có node_modules):
+    .\start-frontend.cmd
+
+Mở trình duyệt:
+    Website:        http://127.0.0.1:3000
+    Tài liệu API:   http://127.0.0.1:8000/docs
+
+Cách chạy thay thế khi đã cài đủ thư viện:
+    npm.cmd run backend
+    npm.cmd run dev
+Hoặc chạy backend trực tiếp:
+    .\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+
+Dừng: bấm Ctrl+C trong từng terminal.
+
+
+6. ĐĂNG NHẬP LẦN ĐẦU
+--------------------
+Lần chạy backend đầu tiên tự tạo 3 tài khoản admin / truongphong / nhanvien.
+Mật khẩu ban đầu nằm trong file:
+    backend\data\initial-accounts.txt
+Đăng nhập admin -> mục "Tài khoản" -> "Đặt lại mật khẩu" cho cả 3 tài khoản.
+
+
+7. KIỂM THỬ
+-----------
+Backend:
+    .\.venv\Scripts\python.exe -m unittest discover -s backend\tests -v
+Extension:
+    node --test extension\tests\composer.test.cjs extension\tests\conversation.test.cjs extension\tests\lifecycle.test.cjs
+Frontend (kiểm tra code và build bản chạy thật):
+    npm.cmd run lint
+    npm.cmd run build
+
+
+8. LƯU Ý KHI CẬP NHẬT CODE
+--------------------------
+- Backend KHÔNG tự nạp lại code: sau khi sửa file trong backend\ phải dừng (Ctrl+C) rồi chạy lại .\start-backend.cmd.
+  Khi khởi động, backend tự cập nhật cấu trúc database (backend\data\studio.sqlite3), không mất dữ liệu.
+- Frontend tự cập nhật khi sửa file; chỉ cần tải lại trang (Ctrl+F5).
+- Extension: sửa xong phải bấm Reload trong chrome://extensions.
+- Muốn tạo PDF bằng trình duyệt khác, đặt biến môi trường trước khi chạy backend, ví dụ:
+    $env:T12_PDF_BROWSER = "C:\duong\dan\toi\chrome.exe"
+    .\start-backend.cmd
+
+
+9. ĐỒNG BỘ DATABASE QUA GIT (tài khoản, mật khẩu, tác vụ, lịch sử)
+-------------------------------------------------------------------
+File backend\data\studio.sqlite3 được đưa lên GitHub (repo đang công khai).
+Database là file nhị phân, Git không gộp được khi 2 máy cùng sửa -> mỗi lúc chỉ làm việc trên 1 máy.
+
+Máy vừa làm việc xong (đẩy lên):
+    (dừng backend bằng Ctrl+C trước)
+    git add backend\data\studio.sqlite3
+    git commit -m "Cap nhat database"
+    git push
+
+Máy kia (lấy về):
+    (dừng backend bằng Ctrl+C trước)
+    git pull
+    .\start-backend.cmd
+
+Lần đầu kéo database về một máy đã tự tạo database riêng, git báo
+"untracked working tree files would be overwritten" -> đổi tên file cũ rồi pull lại:
+    ren backend\data\studio.sqlite3 studio.old.sqlite3
+    git pull
+
+Nếu 2 máy cùng sửa và git báo conflict ở studio.sqlite3 -> chọn giữ 1 bản:
+    git checkout --theirs backend\data\studio.sqlite3   (lấy bản trên GitHub)
+    hoặc
+    git checkout --ours backend\data\studio.sqlite3     (giữ bản trên máy mình)
+    git add backend\data\studio.sqlite3
+    git commit
+
+Sau khi kéo database về, đăng nhập bằng mật khẩu đã đặt ở máy kia (không dùng initial-accounts.txt nữa).
+
+
+10. LỖI THƯỜNG GẶP
+------------------
+- PowerShell chặn npm.ps1                -> dùng npm.cmd thay cho npm.
+- "Backend chưa chạy"                    -> mở .\start-backend.cmd, kiểm tra cổng 8000.
+- "Chưa kết nối extension"               -> chạy backend trước, rồi bấm "Mở tool" trong extension.
+- Nút "Chạy AI Agent" bị mờ              -> extension chưa kết nối, tác vụ đã nộp/đã duyệt, hoặc backend đang chạy code cũ (khởi động lại backend).
+- npm báo EPERM khi cài                  -> đóng VS Code/Explorer đang mở thư mục node_modules, xóa node_modules rồi chạy lại npm.cmd ci.
+- "Không tìm thấy Microsoft Edge hoặc Google Chrome để tạo PDF" -> cài Edge/Chrome hoặc đặt T12_PDF_BROWSER.
+- Quên mật khẩu                          -> Admin đặt lại trong mục "Tài khoản"; đăng nhập sai 5 lần phải chờ 15 phút.

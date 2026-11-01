@@ -118,7 +118,7 @@ Bộ kiểm thử bao gồm đọc CSV/XLSX, tệp lỗi, dữ liệu mẫu 60 d
 - Tải PDF dùng Microsoft Edge (có sẵn trên Windows) hoặc Google Chrome đã cài trên máy để in báo cáo, nên PDF giống hệt báo cáo trên màn hình. Có thể chỉ định trình duyệt khác bằng biến môi trường `T12_PDF_BROWSER`. Đây là bản tải về của một lượt chạy, không thay thế bước T13 xuất báo cáo PDF tự động (ngoài phạm vi web).
 - Phản hồi AI được lưu dưới dạng văn bản; người dùng cần kiểm tra lại số liệu. Kết quả không được tự động xác thực theo schema báo cáo T12.
 - Thiết kế dùng cho **một máy cá nhân**, không triển khai công khai backend. Chỉ chạy một worker Uvicorn vì kết nối extension/hàng đợi điều phối trong tiến trình.
-- SQLite giữ tệp gốc, prompt, thống kê và kết quả trong `backend/data/studio.sqlite3`; mã ghép nối ở `backend/data/bridge.key`. Không chia sẻ các tệp này và không đưa lên Git.
+- SQLite giữ tài khoản, tác vụ, tệp gốc, prompt, kết quả và nhật ký trong `backend/data/studio.sqlite3`. Tệp này **được đưa lên Git** để các máy clone dùng chung tài khoản và dữ liệu (repo công khai nên ai cũng tải được). `backend/data/initial-accounts.txt` (mật khẩu ban đầu) và `backend/data/bridge.key` (mã ghép nối extension của từng máy) vẫn chỉ ở máy. Database là tệp nhị phân, không gộp được khi hai máy cùng sửa: dừng backend trước khi commit hoặc pull, và mỗi lúc chỉ làm việc trên một máy.
 - Lần chạy thật với ChatGPT cần nạp extension và đăng nhập trong đúng hồ sơ trình duyệt; kiểm thử tự động không sử dụng tài khoản đăng nhập của bạn.
 
 ## Xử lý lỗi thường gặp

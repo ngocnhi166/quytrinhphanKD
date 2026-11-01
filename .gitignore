@@ -44,6 +44,9 @@ next-env.d.ts
 .venv/
 __pycache__/
 *.pyc
-backend/data/
+# The SQLite database is versioned so every clone shares accounts, tasks and history.
+# Plain-text initial passwords, the per-machine extension key and SQLite temp files stay local.
+backend/data/*
+!backend/data/studio.sqlite3
 **/.next/
 **/node_modules/
