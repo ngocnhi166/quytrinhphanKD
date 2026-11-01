@@ -43,6 +43,8 @@
 .audit-table td:nth-child(4),.audit-table td:nth-child(5){max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-actions{text-align:right;white-space:nowrap}
 .row-actions button+button{margin-left:6px}
+.secondary.danger{color:#a13c32;border-color:#e5bcb6}
+.secondary.danger:not(:disabled):hover{background:#fff0ee}
 .inline-select{width:auto;min-width:130px}
 tr.warn td{background:#fff6f1}
 .file-button{width:auto;cursor:pointer}

@@ -198,6 +198,32 @@ def change_user(user_id: int, body: UserChange, request: Request, admin=Depends(
     return {"ok": True}
 
 
+@router.delete("/users/{user_id}")
+def delete_user(user_id: int, request: Request, admin=Depends(allow("admin"))):
+    if user_id == admin["id"]:
+        deny(admin, request, "tự xóa tài khoản", "Không thể tự xóa tài khoản đang đăng nhập.")
+    with connection() as db:
+        # Serialize deletion with task/data creation so linked records cannot be orphaned.
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT username FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Không tìm thấy tài khoản.")
+        linked = (
+            db.execute("SELECT 1 FROM tasks WHERE assignee_id=? OR created_by=? OR reviewed_by=? LIMIT 1", (user_id, user_id, user_id)).fetchone()
+            or db.execute("SELECT 1 FROM jobs WHERE user_id=? LIMIT 1", (user_id,)).fetchone()
+            or db.execute("SELECT 1 FROM datasets WHERE created_by=? LIMIT 1", (user_id,)).fetchone()
+        )
+        if linked:
+            raise HTTPException(409, "Tài khoản đã gắn với tác vụ hoặc dữ liệu. Hãy khóa tài khoản để giữ lịch sử công việc.")
+        db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+        # Keep historical usernames without linking them to a future reused user ID.
+        db.execute("UPDATE audit SET user_id=NULL WHERE user_id=?", (user_id,))
+        db.execute("DELETE FROM users WHERE id=?", (user_id,))
+        db.execute("INSERT INTO audit (at, user_id, username, action, target, detail) VALUES (?,?,?,?,?,?)",
+                   (time.time(), admin["id"], admin["username"], "user_delete", row["username"], "Xóa tài khoản và thu hồi phiên đăng nhập"))
+    return {"ok": True}
+
+
 class NewDepartment(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 

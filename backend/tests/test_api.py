@@ -319,6 +319,42 @@ class AccessTests(Base):
         self.login("emp", "matkhaumoi1")
         self.assertIn("user_update", self.actions())
 
+    def test_delete_account_revokes_sessions_and_preserves_audit(self):
+        target = self.ids["emp2"]
+        employee = self.login("emp2")
+        self.assertEqual(self.admin.delete(f"/api/users/{target}").status_code, 200)
+        self.assertEqual(employee.get("/api/me").status_code, 401)
+        self.assertNotIn(target, [u["id"] for u in self.admin.get("/api/users").json()])
+        self.assertEqual(self.client.post("/api/auth/login", json={"username": "emp2", "password": PASSWORD}).status_code, 401)
+        with store.connection() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM sessions WHERE user_id=?", (target,)).fetchone()[0], 0)
+            history = db.execute("SELECT user_id, username FROM audit WHERE username='emp2' AND action='login'").fetchone()
+            self.assertIsNone(history["user_id"])
+            self.assertEqual(history["username"], "emp2")
+            event = db.execute("SELECT target FROM audit WHERE action='user_delete'").fetchone()
+            self.assertEqual(event["target"], "emp2")
+        self.assertEqual(self.admin.delete(f"/api/users/{target}").status_code, 404)
+
+    def test_delete_account_permissions(self):
+        target = self.ids["emp2"]
+        self.assertEqual(self.client.delete(f"/api/users/{target}").status_code, 401)
+        self.assertEqual(self.emp.delete(f"/api/users/{target}").status_code, 403)
+        self.assertEqual(self.login("boss").delete(f"/api/users/{target}").status_code, 403)
+        self.assertEqual(self.admin.delete(f"/api/users/{self.ids['admin']}").status_code, 403)
+        self.assertEqual(self.admin.get("/api/me").status_code, 200)
+
+    def test_delete_account_preserves_linked_data(self):
+        task = self.make_task()
+        run = self.finished_run(task, "Kết quả")
+        self.assertEqual(self.admin.delete(f"/api/users/{self.ids['emp']}").status_code, 409)
+        self.assertEqual(self.admin.delete(f"/api/users/{self.ids['admin']}").status_code, 403)
+        self.assertEqual(self.emp.get("/api/me").status_code, 200)
+        self.assertEqual(self.emp.get(f"/api/tasks/{task}").status_code, 200)
+        self.assertEqual(self.emp.get(f"/api/jobs/{run}").status_code, 200)
+        with store.connection() as db:
+            db.execute("INSERT INTO datasets (id, created_by) VALUES ('owned', ?)", (self.ids["emp2"],))
+        self.assertEqual(self.admin.delete(f"/api/users/{self.ids['emp2']}").status_code, 409)
+
     def test_login_lockout_after_repeated_failures(self):
         for _ in range(5):
             self.assertEqual(self.client.post("/api/auth/login", json={"username": "boss", "password": "sai"}).status_code, 401)

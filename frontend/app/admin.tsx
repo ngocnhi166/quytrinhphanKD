@@ -25,6 +25,7 @@ export function Accounts({ me }: { me: User }) {
   const blank = { username: "", full_name: "", password: "", role: "employee" as Role, department_id: "" };
   const [form, setForm] = useState(blank);
   const [department, setDepartment] = useState("");
+  const [deleting, setDeleting] = useState<number | null>(null);
   const firstDepartment = departments.data?.[0]?.id ?? null;
   const change = (user: User, body: object, done: string) => act(() => send(`/users/${user.id}`, "PATCH", body), done);
   async function create() {
@@ -34,6 +35,14 @@ export function Accounts({ me }: { me: User }) {
   function resetPassword(user: User) {
     const password = window.prompt(`Mật khẩu mới cho ${user.username} (tối thiểu 8 ký tự):`);
     if (password) change(user, { password }, `Đã đặt lại mật khẩu cho ${user.username}. Phiên đăng nhập cũ đã bị thu hồi.`);
+  }
+  async function deleteAccount(user: User) {
+    if (deleting !== null || user.id === me.id) return;
+    if (!window.confirm(`Xóa vĩnh viễn tài khoản ${user.username}? Tài khoản sẽ không thể đăng nhập lại. Thao tác này không thể hoàn tác.`)) return;
+    setDeleting(user.id);
+    try {
+      await act(() => send(`/users/${user.id}`, "DELETE"), `Đã xóa tài khoản ${user.username}.`);
+    } finally { setDeleting(null); }
   }
   return <>
     {alerts}
@@ -55,7 +64,7 @@ export function Accounts({ me }: { me: User }) {
         <td><select className="inline-select" value={user.role} disabled={self} title={self ? "Không thể tự đổi vai trò của mình" : undefined} onChange={e => change(user, { role: e.target.value, department_id: e.target.value === "admin" ? null : user.department_id ?? firstDepartment }, `Đã đổi vai trò của ${user.username}.`)}>{(Object.keys(roleNames) as Role[]).map(r => <option key={r} value={r}>{roleNames[r]}</option>)}</select></td>
         <td>{user.role === "admin" ? <span className="muted">Toàn hệ thống</span> : <select className="inline-select" value={user.department_id ?? ""} onChange={e => change(user, { department_id: Number(e.target.value) }, `Đã đổi phòng ban của ${user.username}.`)}>{departments.data?.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select>}</td>
         <td><span className={`status ${user.active ? "succeeded" : "failed"}`}>{user.active ? "Hoạt động" : "Đã khóa"}</span></td>
-        <td className="row-actions"><button className="secondary" disabled={self} onClick={() => change(user, { active: !user.active }, user.active ? `Đã khóa ${user.username}.` : `Đã mở khóa ${user.username}.`)}>{user.active ? "Khóa" : "Mở khóa"}</button><button className="secondary" onClick={() => resetPassword(user)}>Đặt lại mật khẩu</button></td>
+        <td className="row-actions"><button className="secondary" disabled={self || deleting === user.id} onClick={() => change(user, { active: !user.active }, user.active ? `Đã khóa ${user.username}.` : `Đã mở khóa ${user.username}.`)}>{user.active ? "Khóa" : "Mở khóa"}</button><button className="secondary" disabled={deleting === user.id} onClick={() => resetPassword(user)}>Đặt lại mật khẩu</button><button className="secondary danger" disabled={self || deleting !== null} title={self ? "Không thể tự xóa tài khoản đang đăng nhập" : `Xóa tài khoản ${user.username}`} onClick={() => deleteAccount(user)}>{deleting === user.id ? "Đang xóa…" : "Xóa tài khoản"}</button></td>
       </tr>; })}
     </tbody></table></div></section>
   </>;
