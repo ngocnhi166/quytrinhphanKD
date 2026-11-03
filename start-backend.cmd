@@ -10,7 +10,7 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" -c "import fastapi, uvicorn, multipart, openpyxl, websockets" >nul 2>&1
+".venv\Scripts\python.exe" -c "import fastapi, uvicorn, multipart, openpyxl, websockets, docx, bs4" >nul 2>&1
 if errorlevel 1 (
   echo Dang cai thu vien backend con thieu...
   ".venv\Scripts\python.exe" -m pip install -r backend\requirements.txt

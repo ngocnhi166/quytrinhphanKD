@@ -45,8 +45,11 @@ class Base(unittest.TestCase):
         return client
 
     def make_task(self, assignee="emp", datasets=()):
-        response = self.admin.post("/api/tasks", json={"title": "Doanh thu Q2", "objective": "Đánh giá doanh thu", "requirements": "So sánh theo khu vực", "assignee_id": self.ids[assignee], "dataset_ids": list(datasets)})
+        response = self.login(assignee).post("/api/tasks", json={"title": "Doanh thu Q2", "objective": "Đánh giá doanh thu", "requirements": "So sánh theo khu vực", "assignee_id": self.ids[assignee], "dataset_ids": list(datasets)})
         self.assertEqual(response.status_code, 201, response.text)
+        # Existing tasks can carry sample grants from the previous assignment workflow.
+        with store.connection() as db:
+            db.executemany("INSERT INTO task_datasets VALUES (?,?)", [(response.json()["id"], dataset) for dataset in datasets])
         return response.json()["id"]
 
     def finished_run(self, task, text, user="emp"):
@@ -187,7 +190,7 @@ class AccessTests(Base):
             self.assertEqual(self.upload(boss, path="/api/jobs", data={"prompt": "x", "task_id": task}).status_code, 403)
             self.assertEqual(self.upload(boss).status_code, 403)
             self.assertEqual(boss.put(f"/api/tasks/{task}/result", json={"run_id": "x"}).status_code, 403)
-            self.assertEqual(boss.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": True}).status_code, 403)
+            self.assertEqual(self.admin.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": True}).status_code, 403)
             # Admin: operates the system and sees all history, never performs the analysis.
             self.assertEqual(self.admin.post("/api/search", json={"prompt": "Hi", "task_id": task}).status_code, 403)
             self.assertEqual(self.admin.put(f"/api/tasks/{task}/result", json={"run_id": "x"}).status_code, 403)
@@ -208,7 +211,7 @@ class AccessTests(Base):
         self.assertEqual(fin.get(f"/api/tasks/{task}").status_code, 403)
         self.assertEqual(self.emp.put(f"/api/tasks/{task}/result", json={"run_id": self.finished_run(task, "Kết luận")}).status_code, 200)
         self.assertEqual(boss.get(f"/api/tasks/{task}").json()["result"], "Kết luận")
-        self.assertEqual(self.admin.get(f"/api/tasks/{task}").json()["result"], "Kết luận")
+        self.assertEqual(self.admin.get(f"/api/tasks/{task}").status_code, 403)
 
     def test_run_history_follows_the_task_assignment(self):
         task = self.make_task()
@@ -226,21 +229,19 @@ class AccessTests(Base):
             self.assertEqual(client.get("/api/jobs/" + run).json()["result"], "Tổng 300")
         self.assertEqual((emp2.get("/api/jobs").json(), fin.get("/api/jobs").json()), ([], []))
         self.assertEqual(fin.get("/api/jobs/" + run).status_code, 403)
-        # History belongs to the task: after reassignment the new assignee sees it, the former one does not.
-        self.admin.put(f"/api/tasks/{task}", json={"title": "Doanh thu Q2", "objective": "x", "requirements": "x", "assignee_id": self.ids["emp2"]})
-        self.assertEqual([j["id"] for j in emp2.get("/api/jobs").json()], [run])
-        self.assertEqual(self.emp.get("/api/jobs").json(), [])
-        self.assertEqual(self.emp.get("/api/jobs/" + run).status_code, 403)
+        self.assertEqual(self.admin.put(f"/api/tasks/{task}", json={}).status_code, 405)
+        self.assertEqual(emp2.get("/api/jobs").json(), [])
 
     def test_t12_submission_and_g11_record(self):
         self.assertEqual(self.upload(self.admin, path="/api/datasets").status_code, 201)
         self.assertEqual(self.upload(self.admin, raw=b"a,b\n1,2\n", path="/api/datasets", filename="other.csv").status_code, 201)
         sample, other = sorted(self.admin.get("/api/datasets").json(), key=lambda d: d["filename"] != "sales.csv")
+        self.assertEqual(self.emp.get("/api/datasets").json(), self.admin.get("/api/datasets").json())
         task = self.make_task(datasets=[sample["id"]])
         brief = self.emp.get(f"/api/tasks/{task}").json()
         self.assertEqual(([d["filename"] for d in brief["datasets"]], brief["status"]), (["sales.csv"], "ready_for_analysis"))
         with self.client.websocket_connect("/api/bridge?token=" + main.BRIDGE_KEY) as ws:
-            self.assertEqual(self.emp.post("/api/jobs", data={"prompt": "x", "task_id": task, "dataset_id": other["id"]}).status_code, 403)
+            self.assertEqual(self.emp.post("/api/jobs", data={"prompt": "x", "task_id": task, "dataset_id": "missing"}).status_code, 404)
             run = self.emp.post("/api/jobs", data={"prompt": "Phân tích", "task_id": task, "dataset_id": sample["id"]})
             self.assertEqual(run.status_code, 201, run.text)
             message = ws.receive_json()
@@ -273,16 +274,16 @@ class AccessTests(Base):
         self.assertEqual(self.emp.put(result, json={"run_id": message["id"]}).status_code, 200)
         chosen = boss.get(f"/api/tasks/{task}").json()
         self.assertEqual((chosen["selected_run_id"], chosen["result"], chosen["result_html"]), (message["id"], "Doanh thu 300 (đã kiểm tra)", "<h2>Doanh thu 300 (đã kiểm tra)</h2>"))
-        self.assertEqual(self.admin.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": True}).status_code, 409)  # not submitted
+        self.assertEqual(boss.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": True}).status_code, 409)  # not submitted
         self.assertEqual(self.emp.post(f"/api/tasks/{task}/submit").status_code, 200)
         self.assertEqual(self.emp.put(result, json={"run_id": message["id"]}).status_code, 409)
         self.assertEqual(self.emp.patch(edit, json={"result": "đổi sau khi nộp"}).status_code, 409)
-        self.assertEqual(self.admin.put(f"/api/tasks/{task}", json={"title": "x", "objective": "x", "requirements": "x", "assignee_id": self.ids["emp"]}).status_code, 409)
-        self.assertEqual(self.admin.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": False}).status_code, 422)
-        self.assertEqual(self.admin.post(f"/api/tasks/{task}/review", json={"status": "needs_revision", "confirmed": True}).status_code, 422)
-        self.assertEqual(self.admin.post(f"/api/tasks/{task}/review", json={"status": "needs_revision", "note": "Bổ sung miền Trung", "confirmed": True}).status_code, 200)
+        self.assertEqual(self.admin.put(f"/api/tasks/{task}", json={"title": "x", "objective": "x", "requirements": "x", "assignee_id": self.ids["emp"]}).status_code, 405)
+        self.assertEqual(boss.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": False}).status_code, 422)
+        self.assertEqual(boss.post(f"/api/tasks/{task}/review", json={"status": "needs_revision", "confirmed": True}).status_code, 422)
+        self.assertEqual(boss.post(f"/api/tasks/{task}/review", json={"status": "needs_revision", "note": "Bổ sung miền Trung", "confirmed": True}).status_code, 200)
         revised = self.emp.get(f"/api/tasks/{task}").json()
-        self.assertEqual((revised["status"], revised["review_note"], revised["reviewer"]), ("needs_revision", "Bổ sung miền Trung", "Admin"))
+        self.assertEqual((revised["status"], revised["review_note"], revised["reviewer"]), ("needs_revision", "Bổ sung miền Trung", "Boss"))
         with self.client.websocket_connect("/api/bridge?token=" + main.BRIDGE_KEY) as ws:
             rerun = self.emp.post("/api/search", json={"prompt": "Bổ sung miền Trung", "task_id": task})
             self.assertEqual(rerun.status_code, 201)
@@ -292,11 +293,12 @@ class AccessTests(Base):
         self.assertEqual(len(self.emp.get(f"/api/jobs?task={task}").json()), 2)  # the first run is kept
         self.assertEqual(self.emp.put(result, json={"run_id": rerun.json()["id"]}).status_code, 200)
         self.assertEqual(self.emp.post(f"/api/tasks/{task}/submit").status_code, 200)
-        self.assertEqual(self.admin.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": True}).status_code, 200)
+        self.assertEqual(boss.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": True}).status_code, 200)
+        self.assertEqual(self.admin.get(f"/api/tasks/{task}").json()["status"], "approved")
         final = self.emp.get(f"/api/tasks/{task}").json()
         self.assertEqual((final["status"], final["result"]), ("approved", "Miền Trung 1,666 tỷ"))
         self.assertEqual(self.emp.post(f"/api/tasks/{task}/submit").status_code, 409)
-        for action in ("dataset_create", "task_create", "ai_run", "run_edit", "result_select", "submit_t12", "record_g11"):
+        for action in ("dataset_create", "task_create", "ai_run", "run_edit", "result_select", "submit_t12", "task_review"):
             self.assertIn(action, self.actions())
 
     def test_account_administration(self):

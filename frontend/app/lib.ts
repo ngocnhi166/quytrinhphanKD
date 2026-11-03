@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 export type Role = "employee" | "manager" | "admin";
-export type User = { id: number; username: string; full_name: string; role: Role; department_id: number | null; department: string | null; active: number; created: number };
+export type User = { id: number; username: string; full_name: string; phone: string; email: string; role: Role; department_id: number | null; department: string | null; active: number; created: number };
 export type Summary = { mode?: string; columns: string[]; row_count: number; preview: Record<string, string>[]; metrics: { duplicate_rows: number; missing_values: Record<string, number>; numeric: Record<string, { sum: string; mean: string; min: string; max: string }> } };
 export type Job = { id: string; filename: string; status: string; prompt: string; result?: string | null; result_html?: string | null; error: string | null; created: number; updated: number; summary: Summary; source?: string | null; edited_result?: string | null; edited_html?: string | null; edited?: number | null; owner?: string | null; task_id?: string | null; task_title?: string | null };
 export type Dataset = { id: string; filename: string; created: number; row_count: number; columns: string[]; preview: Record<string, string>[] };
@@ -9,14 +9,14 @@ export type Task = { id: string; title: string; objective: string; requirements:
 export type Department = { id: number; name: string; members: number };
 export type AuditEntry = { id: number; at: number; username: string | null; action: string; target: string; detail: string };
 
-export const roleNames: Record<Role, string> = { employee: "Nhân viên", manager: "Trưởng phòng", admin: "Admin" };
+export const roleNames: Record<Role, string> = { employee: "Nhân viên", manager: "Trưởng phòng", admin: "Quản trị viên" };
 export const jobLabels: Record<string, string> = { queued: "Đang chờ", running: "Đang xử lý", succeeded: "Hoàn thành", failed: "Cần kiểm tra" };
-export const taskLabels: Record<string, string> = { ready_for_analysis: "Sẵn sàng phân tích", in_progress: "Đang thực hiện", submitted: "Đã nộp · chờ G11", needs_revision: "Cần chỉnh sửa", approved: "Đã duyệt" };
+export const taskLabels: Record<string, string> = { ready_for_analysis: "Sẵn sàng phân tích", in_progress: "Đang thực hiện", submitted: "Chờ phê duyệt", needs_revision: "Cần chỉnh sửa", approved: "Đã duyệt" };
 // Reuses the job status colours: waiting, in progress, needs attention, done.
 export const taskTone: Record<string, string> = { ready_for_analysis: "queued", in_progress: "running", submitted: "running", needs_revision: "failed", approved: "succeeded" };
 export const OPEN = ["ready_for_analysis", "in_progress", "needs_revision"];
-export const actionLabels: Record<string, string> = { login: "Đăng nhập", login_failed: "Đăng nhập sai", logout: "Đăng xuất", denied: "Bị từ chối truy cập", user_create: "Tạo tài khoản", user_update: "Sửa tài khoản", user_delete: "Xóa tài khoản", department_create: "Tạo phòng ban", dataset_create: "Thêm dữ liệu mẫu", dataset_delete: "Xóa dữ liệu mẫu", task_create: "Giao tác vụ", task_update: "Sửa tác vụ", ai_run: "Chạy AI", run_edit: "Sửa kết quả AI", run_export: "Tải PDF kết quả AI", result_save: "Lưu kết quả", result_select: "Chọn kết quả tác vụ", submit_t12: "Submit T12", record_g11: "Ghi nhận quyết định G11" };
-const fieldNames: Record<string, string> = { username: "tên đăng nhập (3–32 ký tự a-z, 0-9, . _ -)", full_name: "họ tên", password: "mật khẩu (tối thiểu 8 ký tự)", title: "tiêu đề", objective: "mục tiêu", requirements: "yêu cầu phân tích", assignee_id: "người thực hiện", name: "tên phòng ban" };
+export const actionLabels: Record<string, string> = { history_remove: "Xóa lượt phân tích khỏi lịch sử", login: "Đăng nhập", login_failed: "Đăng nhập sai", logout: "Đăng xuất", denied: "Bị từ chối truy cập", user_create: "Tạo tài khoản", user_update: "Sửa tài khoản", user_delete: "Xóa tài khoản", department_create: "Tạo phòng ban", department_delete: "Xóa phòng ban", department_update: "Sửa phòng ban", dataset_create: "Thêm dữ liệu mẫu", dataset_delete: "Xóa dữ liệu mẫu", task_review: "Phê duyệt tác vụ", task_create: "Tạo tác vụ", task_delete: "Xóa tác vụ", task_update: "Sửa tác vụ", ai_run: "Chạy AI", run_edit: "Sửa kết quả AI", run_export: "Tải PDF kết quả AI", result_save: "Lưu kết quả", result_select: "Chọn kết quả tác vụ", submit_t12: "Submit T12", record_g11: "Ghi nhận quyết định G11" };
+const fieldNames: Record<string, string> = { phone: "số điện thoại", email: "địa chỉ email", username: "tên đăng nhập (3–32 ký tự A-Z, a-z, 0-9, . _ -)", full_name: "họ tên", password: "mật khẩu (tối thiểu 8 ký tự)", title: "tiêu đề", objective: "mục tiêu", requirements: "yêu cầu phân tích", assignee_id: "người thực hiện", name: "tên phòng ban" };
 
 export const when = (seconds: number) => new Date(seconds * 1000).toLocaleString("vi-VN");
 

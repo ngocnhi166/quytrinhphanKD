@@ -13,10 +13,9 @@ export default function QuickQuestion({ taskId, ready, onCreated }: { taskId: st
     finally { setBusy(false); }
   }
   return <section className="card input-card">
-    <div className="card-heading"><span className="step">01</span><div><h2>Hỏi nhanh</h2><p>Nhập câu hỏi → gửi ChatGPT → nhận câu trả lời</p></div></div>
+    <div className="card-heading"><span className="step">01</span><div><h2>Hỏi nhanh</h2></div></div>
     <label className="field-label" htmlFor="quick-question">Câu hỏi của bạn</label>
     <textarea id="quick-question" value={question} onChange={e => setQuestion(e.target.value)} maxLength={4000}/>
-    <p className="fine-print">Chỉ gửi câu hỏi đơn giản. Không cần tải tệp hoặc phân tích dữ liệu.</p>
     {error && <p className="alert error" role="alert">{error}</p>}
     <div className="input-footer"><button className="primary" onClick={ask} disabled={!ready || busy || !question.trim()}>{busy ? "Đang gửi…" : "Gửi câu hỏi →"}</button></div>
   </section>;

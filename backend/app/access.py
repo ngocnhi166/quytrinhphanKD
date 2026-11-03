@@ -49,7 +49,7 @@ def deny(user, request, reason, message="Bạn không có quyền thực hiện 
     raise HTTPException(403, message)
 
 
-USER_FIELDS = "u.id, u.username, u.full_name, u.role, u.department_id, d.name AS department, u.active, u.created"
+USER_FIELDS = "u.id, u.username, u.full_name, u.phone, u.email, u.role, u.department_id, d.name AS department, u.active, u.created"
 
 
 def current_user(request: Request):
@@ -86,7 +86,7 @@ def login(body: Login, response: Response):
     username = body.username.strip().lower()
     with connection() as db:
         failures = db.execute("SELECT COUNT(*) FROM audit WHERE action='login_failed' AND target=? AND at>?", (username, time.time() - 900)).fetchone()[0]
-        row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        row = db.execute("SELECT * FROM users WHERE username=? COLLATE NOCASE", (username,)).fetchone()
     if failures >= 5:
         raise HTTPException(429, "Đăng nhập sai quá 5 lần. Thử lại sau 15 phút.")
     if not verify_password(body.password, row["password"] if row else DUMMY_HASH) or not row:
@@ -122,8 +122,10 @@ def me(user=Depends(current_user)):
 # --- Accounts and departments: Admin only -------------------------------------------------
 
 class NewUser(BaseModel):
-    username: str = Field(pattern=r"^[a-z0-9._-]{3,32}$")
+    username: str = Field(pattern=r"^[a-zA-Z0-9._-]{3,32}$")
     full_name: str = Field(min_length=1, max_length=100)
+    phone: str = Field(default="", max_length=30, pattern=r"^(?:[+0-9][0-9 ()+.-]{5,29})?$")
+    email: str = Field(default="", max_length=254, pattern=r"^(?:[^\s@]+@[^\s@]+\.[^\s@]+)?$")
     password: str = Field(min_length=8, max_length=128)
     role: Literal["employee", "manager", "admin"]
     department_id: int | None = None
@@ -154,10 +156,13 @@ def users(admin=Depends(allow("admin"))):
 @router.post("/users", status_code=201)
 def create_user(body: NewUser, admin=Depends(allow("admin"))):
     with connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        if db.execute("SELECT 1 FROM users WHERE username=? COLLATE NOCASE", (body.username,)).fetchone():
+            raise HTTPException(409, "Tên đăng nhập đã tồn tại (không phân biệt chữ hoa, chữ thường).")
         department = checked_department(db, body.role, body.department_id)
         try:
-            db.execute("INSERT INTO users (username, full_name, password, role, department_id, created) VALUES (?,?,?,?,?,?)",
-                       (body.username, body.full_name.strip(), hash_password(body.password), body.role, department, time.time()))
+            db.execute("INSERT INTO users (username, full_name, password, role, department_id, created, phone, email) VALUES (?,?,?,?,?,?,?,?)",
+                       (body.username, body.full_name.strip(), hash_password(body.password), body.role, department, time.time(), body.phone.strip(), body.email.strip()))
         except sqlite3.IntegrityError:
             raise HTTPException(409, "Tên đăng nhập đã tồn tại.")
     audit(admin, "user_create", body.username, f"vai trò {ROLES[body.role]}")
@@ -214,7 +219,7 @@ def delete_user(user_id: int, request: Request, admin=Depends(allow("admin"))):
             or db.execute("SELECT 1 FROM datasets WHERE created_by=? LIMIT 1", (user_id,)).fetchone()
         )
         if linked:
-            raise HTTPException(409, "Tài khoản đã gắn với tác vụ hoặc dữ liệu. Hãy khóa tài khoản để giữ lịch sử công việc.")
+            raise HTTPException(409, "Tài khoản đã gắn với tác vụ hoặc dữ liệu. Hãy khóa tài khoản để giữ lịch sử tác vụ.")
         db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
         # Keep historical usernames without linking them to a future reused user ID.
         db.execute("UPDATE audit SET user_id=NULL WHERE user_id=?", (user_id,))
@@ -245,6 +250,40 @@ def create_department(body: NewDepartment, admin=Depends(allow("admin"))):
     return {"ok": True}
 
 
+@router.patch("/departments/{department_id}")
+def rename_department(department_id: int, body: NewDepartment, admin=Depends(allow("admin"))):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Tên phòng ban không được để trống.")
+    with connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT name FROM departments WHERE id=?", (department_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Không tìm thấy phòng ban.")
+        try:
+            db.execute("UPDATE departments SET name=? WHERE id=?", (name, department_id))
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "Tên phòng ban đã tồn tại.")
+        db.execute("INSERT INTO audit (at,user_id,username,action,target,detail) VALUES (?,?,?,?,?,?)", (time.time(),admin["id"],admin["username"],"department_update",name,row["name"] + " → " + name))
+    return {"ok": True}
+
+
+@router.delete("/departments/{department_id}")
+def delete_department(department_id: int, admin=Depends(allow("admin"))):
+    with connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT name FROM departments WHERE id=?", (department_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Không tìm thấy phòng ban.")
+        if db.execute("SELECT 1 FROM users WHERE department_id=?", (department_id,)).fetchone():
+            raise HTTPException(409, "Phòng ban còn tài khoản. Hãy chuyển tài khoản sang phòng ban khác trước khi xóa.")
+        if db.execute("SELECT 1 FROM tasks WHERE department_id=?", (department_id,)).fetchone():
+            raise HTTPException(409, "Phòng ban có tác vụ liên quan, không thể xóa để bảo toàn lịch sử.")
+        db.execute("DELETE FROM departments WHERE id=?", (department_id,))
+        db.execute("INSERT INTO audit (at,user_id,username,action,target,detail) VALUES (?,?,?,?,?,?)", (time.time(),admin["id"],admin["username"],"department_delete",row["name"],"Xóa phòng ban"))
+    return {"ok": True}
+
+
 # --- Sample data: managed by Admin, used by assigned employees ------------------------------
 
 def dataset_view(row):
@@ -253,17 +292,18 @@ def dataset_view(row):
 
 
 @router.get("/datasets")
-def datasets(admin=Depends(allow("admin"))):
+def datasets(user=Depends(allow("admin", "employee"))):
     with connection() as db:
-        return [dataset_view(r) for r in db.execute("SELECT id, filename, summary, created FROM datasets ORDER BY created DESC")]
+        return [dataset_view(row) for row in db.execute("SELECT id, filename, summary, created FROM datasets ORDER BY created DESC, id")]
+
 
 
 @router.post("/datasets", status_code=201)
-async def create_dataset(file: UploadFile = File(...), admin=Depends(allow("admin"))):
+async def create_dataset(file: UploadFile = File(...), user=Depends(allow("admin", "employee"))):
     name, raw, summary = await read_upload(file)
     with connection() as db:
-        db.execute("INSERT INTO datasets (id, filename, summary, raw, created_by, created) VALUES (?,?,?,?,?,?)", (str(uuid.uuid4()), name, json.dumps(summary, ensure_ascii=False), raw, admin["id"], time.time()))
-    audit(admin, "dataset_create", name, f"{summary['row_count']} dòng")
+        db.execute("INSERT INTO datasets (id, filename, summary, raw, created_by, created) VALUES (?,?,?,?,?,?)", (str(uuid.uuid4()), name, json.dumps(summary, ensure_ascii=False), raw, user["id"], time.time()))
+    audit(user, "dataset_create", name, f"{summary['row_count']} dòng")
     return {"ok": True}
 
 
@@ -288,8 +328,8 @@ def task_scope(user):
     if user["role"] == "employee":
         return "t.assignee_id = ?", (user["id"],)
     if user["role"] == "manager":
-        return "t.department_id = ?", (user["department_id"],)
-    return "1 = 1", ()
+        return "a.role='employee' AND a.department_id=? AND t.status IN ('submitted','approved')", (user["department_id"],)
+    return "t.status = ?", ("approved",)
 
 
 def visible_task(db, user, task_id, request):
@@ -297,7 +337,7 @@ def visible_task(db, user, task_id, request):
     if not row:
         raise HTTPException(404, "Không tìm thấy tác vụ.")
     scope, args = task_scope(user)
-    if not db.execute(f"SELECT 1 FROM tasks t WHERE t.id = ? AND {scope}", (task_id, *args)).fetchone():
+    if not db.execute(f"{TASK_QUERY} WHERE t.id = ? AND {scope}", (task_id, *args)).fetchone():
         deny(user, request, "tác vụ ngoài phạm vi được phân công", "Bạn không được phân công hoặc quản lý tác vụ này.")
     return row
 
@@ -310,9 +350,9 @@ def workable_task(db, user, task_id, request):
 
 
 def task_dataset(db, task_id, dataset_id):
-    row = db.execute("SELECT d.* FROM datasets d JOIN task_datasets td ON td.dataset_id = d.id WHERE td.task_id = ? AND d.id = ?", (task_id, dataset_id)).fetchone()
+    row = db.execute("SELECT filename, raw, summary FROM datasets WHERE id=?", (dataset_id,)).fetchone()
     if not row:
-        raise HTTPException(403, "Dữ liệu này không thuộc tác vụ được giao.")
+        raise HTTPException(404, "Tệp không còn trong kho dữ liệu chung.")
     return row["filename"], row["raw"], json.loads(row["summary"])
 
 
@@ -342,44 +382,41 @@ RUN_OUTPUT = "SELECT COALESCE(edited_result, result) AS text, CASE WHEN edited_r
 
 
 class TaskIn(BaseModel):
+    dataset_id: str = ""
     title: str = Field(min_length=1, max_length=200)
     objective: str = Field(min_length=1, max_length=4000)
-    requirements: str = Field(min_length=1, max_length=8000)
-    assignee_id: int
-    dataset_ids: list[str] = Field(default_factory=list, max_length=20)
-
-
-def save_task(db, task_id, body):
-    assignee = db.execute("SELECT department_id FROM users WHERE id=? AND role='employee' AND active=1", (body.assignee_id,)).fetchone()
-    if not assignee or not assignee["department_id"]:
-        raise HTTPException(422, "Chỉ giao tác vụ cho nhân viên đang hoạt động và thuộc một phòng ban.")
-    ids = list(dict.fromkeys(body.dataset_ids))
-    if ids and db.execute(f"SELECT COUNT(*) FROM datasets WHERE id IN ({','.join('?' * len(ids))})", ids).fetchone()[0] != len(ids):
-        raise HTTPException(422, "Có dữ liệu mẫu không tồn tại.")
-    db.execute("UPDATE tasks SET title=?, objective=?, requirements=?, assignee_id=?, department_id=?, updated=? WHERE id=?",
-               (body.title.strip(), body.objective.strip(), body.requirements.strip(), body.assignee_id, assignee["department_id"], time.time(), task_id))
-    db.execute("DELETE FROM task_datasets WHERE task_id=?", (task_id,))
-    db.executemany("INSERT INTO task_datasets (task_id, dataset_id) VALUES (?,?)", [(task_id, i) for i in ids])
+    requirements: str = Field("", max_length=8000)
 
 
 @router.post("/tasks", status_code=201)
-def create_task(body: TaskIn, admin=Depends(allow("admin"))):
+def create_task(body: TaskIn, user=Depends(allow("employee"))):
+    if not body.title.strip() or not body.objective.strip() or not user["department_id"]:
+        raise HTTPException(422, "Tác vụ cần có tên, mục tiêu và phòng ban phụ trách.")
     task_id, now = str(uuid.uuid4()), time.time()
     with connection() as db:
-        db.execute("INSERT INTO tasks (id, status, created_by, created, updated) VALUES (?,?,?,?,?)", (task_id, "ready_for_analysis", admin["id"], now, now))
-        save_task(db, task_id, body)
-    audit(admin, "task_create", body.title.strip(), f"giao cho tài khoản #{body.assignee_id}")
+        db.execute("INSERT INTO tasks (id,title,objective,requirements,status,assignee_id,department_id,created_by,created,updated) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (task_id, body.title.strip(), body.objective.strip(), body.requirements.strip(), "ready_for_analysis", user["id"], user["department_id"], user["id"], now, now))
+        if body.dataset_id:
+            available = db.execute("SELECT id FROM datasets WHERE id=?", (body.dataset_id,)).fetchone()
+            if not available:
+                raise HTTPException(404, "Tệp không còn trong kho dữ liệu chung.")
+            db.execute("INSERT INTO task_datasets (task_id,dataset_id) VALUES (?,?)", (task_id, body.dataset_id))
+    audit(user, "task_create", body.title.strip())
     return {"id": task_id}
 
 
-@router.put("/tasks/{task_id}")
-def update_task(task_id: str, body: TaskIn, request: Request, admin=Depends(allow("admin"))):
+@router.delete("/tasks/{task_id}")
+def delete_task(task_id: str, request: Request, user=Depends(allow("employee"))):
     with connection() as db:
-        row = visible_task(db, admin, task_id, request)
-        if row["status"] in ("submitted", "approved"):
-            raise HTTPException(409, "Tác vụ đã nộp hoặc đã duyệt; không sửa để giữ nguyên căn cứ giải trình.")
-        save_task(db, task_id, body)
-    audit(admin, "task_update", body.title.strip(), f"giao cho tài khoản #{body.assignee_id}")
+        task = workable_task(db, user, task_id, request)
+        if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status IN ('queued','running')", (task_id,)).fetchone():
+            raise HTTPException(409, "Vui lòng chờ lượt phân tích hoàn tất trước khi xóa.")
+        db.execute("DELETE FROM tasks WHERE id=? AND assignee_id=? AND status=?", (task_id, user["id"], task["status"]))
+        if not db.execute("SELECT changes()").fetchone()[0]:
+            raise HTTPException(409, "Tác vụ đã thay đổi. Vui lòng tải lại danh sách.")
+        db.execute("DELETE FROM task_datasets WHERE task_id=?", (task_id,))
+        db.execute("UPDATE jobs SET task_id=NULL WHERE task_id=?", (task_id,))
+    audit(user, "task_delete", task["title"])
     return {"ok": True}
 
 
@@ -420,18 +457,20 @@ class Review(BaseModel):
 
 
 @router.post("/tasks/{task_id}/review")
-def review_task(task_id: str, body: Review, request: Request, admin=Depends(allow("admin"))):
+def review_task(task_id: str, body: Review, request: Request, manager=Depends(allow("manager"))):
     if not body.confirmed:
-        raise HTTPException(422, "Chỉ cập nhật khi Trưởng phòng đã có quyết định tại G11.")
+        raise HTTPException(422, "Vui lòng xác nhận quyết định.")
     if body.status == "needs_revision" and not body.note.strip():
         raise HTTPException(422, "Ghi chú nội dung cần chỉnh sửa theo quyết định của Trưởng phòng.")
     with connection() as db:
-        row = visible_task(db, admin, task_id, request)
+        row = visible_task(db, manager, task_id, request)
         if row["status"] != "submitted":
-            raise HTTPException(409, "Chỉ ghi nhận quyết định G11 cho tác vụ đã Submit.")
+            raise HTTPException(409, "Chỉ phê duyệt tác vụ đang chờ duyệt.")
         now = time.time()
-        db.execute("UPDATE tasks SET status=?, review_note=?, reviewed_by=?, reviewed=?, updated=? WHERE id=?", (body.status, body.note.strip(), admin["id"], now, now, task_id))
-    audit(admin, "record_g11", row["title"], f"{body.status}: {body.note.strip()}")
+        changed = db.execute("UPDATE tasks SET status=?, review_note=?, reviewed_by=?, reviewed=?, updated=? WHERE id=? AND status='submitted'", (body.status, body.note.strip(), manager["id"], now, now, task_id))
+        if changed.rowcount != 1:
+            raise HTTPException(409, "Tác vụ đã được xử lý.")
+    audit(manager, "task_review", row["title"], f"{body.status}: {body.note.strip()}")
     return {"ok": True}
 
 

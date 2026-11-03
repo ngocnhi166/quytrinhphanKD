@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Lora } from "next/font/google";
 import "./globals.css";
 export const metadata: Metadata = {
-  title: "T12 Studio · Phân tích dữ liệu",
+  title: "SCOPE T12 · Phân tích dữ liệu",
   description: "Không gian phân tích dữ liệu với ChatGPT trên trình duyệt của bạn.",
 };
 // Georgia lacks stacked Vietnamese diacritics (ế, ộ…), which then render detached; Lora carries them.

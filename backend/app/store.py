@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS datasets (id TEXT PRIMARY KEY, filename TEXT, summary TEXT, raw BLOB, created_by INTEGER, created REAL);
 CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT, objective TEXT, requirements TEXT, department_id INTEGER, assignee_id INTEGER, status TEXT, result TEXT, review_note TEXT, reviewed_by INTEGER, created_by INTEGER, created REAL, updated REAL, submitted REAL, reviewed REAL);
+CREATE TABLE IF NOT EXISTS hidden_history (user_id INTEGER NOT NULL, job_id TEXT NOT NULL, PRIMARY KEY(user_id, job_id));
 CREATE TABLE IF NOT EXISTS task_datasets (task_id TEXT, dataset_id TEXT, PRIMARY KEY (task_id, dataset_id));
 CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, at REAL, user_id INTEGER, username TEXT, action TEXT, target TEXT, detail TEXT);
 """
@@ -40,8 +41,12 @@ def init_db(seed=True):
     from .access import hash_password
     with connection() as db:
         db.executescript(SCHEMA)
+        user_columns = {row[1] for row in db.execute("PRAGMA table_info(users)")}
+        for column in ("phone", "email"):
+            if column not in user_columns:
+                db.execute(f"ALTER TABLE users ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
-        for column, kind in (("result_html", "TEXT"), ("user_id", "INTEGER"), ("task_id", "TEXT"), ("source", "TEXT"), ("edited_result", "TEXT"), ("edited_html", "TEXT"), ("edited", "REAL")):
+        for column, kind in (("history_removed", "INTEGER NOT NULL DEFAULT 0"), ("result_html", "TEXT"), ("user_id", "INTEGER"), ("task_id", "TEXT"), ("source", "TEXT"), ("edited_result", "TEXT"), ("edited_html", "TEXT"), ("edited", "REAL")):
             if column not in columns:
                 db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
         if "selected_run_id" not in {row[1] for row in db.execute("PRAGMA table_info(tasks)")}:

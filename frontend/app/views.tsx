@@ -1,37 +1,82 @@
 "use client";
 
-import { useState } from "react";
-import { Job, Role, roleNames, Task, useApi } from "./lib";
+import { useRef, useState } from "react";
+import { Job, Role, roleNames, Task, send, useApi } from "./lib";
 import { JobList, JobView, TaskBrief } from "./ui";
 
-// Read-only evidence of a task: the result the employee saved and every AI run (Manager and Admin).
-export function TaskEvidence({ task }: { task: Task }) {
-  const { data: jobs } = useApi<Job[]>(`/jobs?task=${task.id}`, 5000);
-  const [selected, setSelected] = useState<string | null>(null);
-  const current = selected ?? jobs?.[0]?.id;
-  return <>
-    <section className="card task-output"><div className="preview-title"><h2>Kết quả tác vụ</h2><span>{task.selected_run_id ? "Lượt chạy nhân viên đã chọn · chỉ xem" : "Chỉ xem"}</span></div>
-      {task.selected_run_id ? <JobView key={task.selected_run_id} id={task.selected_run_id}/> : <pre className="answer saved-result">{task.result || "Nhân viên chưa chọn kết quả."}</pre>}
-    </section>
-    <section className="card history-card"><div className="preview-title"><h2>Lịch sử chạy AI của tác vụ</h2><span>{jobs?.length ?? 0} lượt</span></div><div className="run-list"><JobList jobs={jobs} selected={current} onSelect={setSelected} showOwner/></div>{current && <JobView key={current} id={current}/>}</section>
-  </>;
+function TaskEvidence({ task }: { task: Task }) {
+  return <section className="card task-output">
+    <div className="preview-title"><h2>Báo cáo kết quả</h2></div>
+    {task.selected_run_id
+      ? <JobView key={task.selected_run_id} id={task.selected_run_id} reportOnly/>
+      : <pre className="answer saved-result">{task.result || "Chưa có báo cáo kết quả."}</pre>}
+  </section>;
 }
 
-// Manager's read-only view of a department task; the G11 decision itself is taken outside the web.
-export function TaskOverview({ taskId }: { taskId: string }) {
-  const { data: task, error } = useApi<Task>(`/tasks/${taskId}`, 5000);
+export function TaskOverview({ taskId, canReview = false }: { taskId: string; canReview?: boolean }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [decision, setDecision] = useState<"approved" | "needs_revision">("approved");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const { data: task, error, reload } = useApi<Task>(`/tasks/${taskId}`, 5000);
   if (!task) return <section className="card"><div className="history-empty">{error || "Đang tải tác vụ…"}</div></section>;
-  return <><TaskBrief task={task}/><TaskEvidence task={task}/></>;
+  function confirmDecision(status: typeof decision) {
+    setDecision(status);
+    dialog.current?.showModal();
+  }
+  async function decide() {
+    dialog.current?.close();
+    if (busy || !canReview || task?.status !== "submitted") return;
+    setBusy(true); setMessage("");
+    try { await send(`/tasks/${taskId}/review`, "POST", { status: decision, note, confirmed: true }); await reload(); }
+    catch (err) { setMessage((err as Error).message); } finally { setBusy(false); }
+  }
+  return <><TaskBrief task={task}/><TaskEvidence task={task}/>{canReview && task.status === "submitted" && <section className="card setup-card task-review"><h2>Đánh giá kết quả tác vụ</h2>
+    <label className="field"><textarea aria-label="Nhận xét" value={note} maxLength={4000} onChange={e => setNote(e.target.value)} placeholder="Nhập nhận xét hoặc nêu rõ nội dung cần chỉnh sửa."/></label>{message && <p role="alert">{message}</p>}<div className="result-actions"><button className="secondary" disabled={busy || !note.trim()} onClick={() => confirmDecision("needs_revision")}>Yêu cầu chỉnh sửa</button><button className="primary" disabled={busy} onClick={() => confirmDecision("approved")}>Phê duyệt tác vụ</button></div>
+    <dialog ref={dialog} className="review-confirm decision-confirm" aria-labelledby="decision-title" aria-describedby="decision-task">
+      <h2 id="decision-title">{decision === "approved" ? "Xác nhận phê duyệt" : "Xác nhận yêu cầu chỉnh sửa"}</h2>
+      <p id="decision-task">{decision === "approved"
+        ? "Sau khi phê duyệt, nhân viên và quản trị viên có thể xem kết quả."
+        : "Nhân viên sẽ nhận được nhận xét của bạn để chỉnh sửa và gửi lại kết quả."}</p>
+      <div><button className="secondary" autoFocus onClick={() => dialog.current?.close()}>Hủy</button>
+        <button className="primary" disabled={busy} onClick={decide}>{decision === "approved" ? "Phê duyệt" : "Gửi yêu cầu"}</button></div>
+    </dialog>
+  </section>}</>;
+
 }
 
 const roles = Object.keys(roleNames) as Role[];
 const historyTitles: Record<Role, string> = { employee: "Lịch sử chạy AI của tác vụ được giao", manager: "Lịch sử chạy AI trong phòng ban", admin: "Toàn bộ lịch sử chạy AI" };
 
 export function RunHistory({ role }: { role: Role }) {
-  const { data: jobs } = useApi<Job[]>("/jobs", 2500);
+  const { data: jobs, reload } = useApi<Job[]>("/jobs", 2500);
+  const [target, setTarget] = useState<Job | null>(null);
+  const [error, setError] = useState("");
+  const [removing, setRemoving] = useState(false);
+  const confirmation = useRef<HTMLDialogElement>(null);
+  async function remove() {
+    if (!target || removing) return;
+    setRemoving(true);
+    try {
+      await send(`/history/${target.id}`, "DELETE");
+      confirmation.current?.close();
+      await reload();
+    } catch (err) { setError((err as Error).message); }
+    finally { setRemoving(false); }
+  }
   const [selected, setSelected] = useState<string | null>(null);
   return <section className="card history-card"><div className="preview-title"><h2>{historyTitles[role]}</h2><span>{jobs?.length ?? 0} lượt gần nhất</span></div>
-    {selected ? <><button className="secondary back-button" onClick={() => setSelected(null)}>← Danh sách lượt chạy</button><JobView key={selected} id={selected}/></> : <JobList jobs={jobs} onSelect={setSelected} showOwner={role !== "employee"}/>}
+    {selected ? <><button className="secondary back-button" onClick={() => setSelected(null)}>← Danh sách lượt chạy</button><JobView key={selected} id={selected}/></> : <JobList jobs={jobs} onRemove={role === "admin" ? job => {
+      setTarget(job); setError(""); confirmation.current?.showModal();
+    } : undefined} onSelect={setSelected} showOwner={role !== "employee"}/>}
+    {role === "admin" && <dialog className="review-confirm decision-confirm" ref={confirmation} aria-labelledby="remove-history-title">
+      <h2 id="remove-history-title">Xóa lượt phân tích khỏi lịch sử?</h2>
+      <p>{target?.filename} · {target && new Date(target.created * 1000).toLocaleString("vi-VN")}</p>
+      {error && <p role="alert">{error}</p>}
+      <div><button className="secondary" autoFocus disabled={removing} onClick={() => confirmation.current?.close()}>Hủy</button>
+        <button className="account-action account-action-delete" disabled={removing} onClick={remove}>{removing ? "Đang xóa…" : "Xóa khỏi lịch sử"}</button></div>
+    </dialog>}
   </section>;
 }
 
