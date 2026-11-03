@@ -1,4 +1,4 @@
-# T12 Studio
+# SCOPE T12
 
 Website phan tich CSV/XLSX qua ChatGPT tren trinh duyet, backend FastAPI va frontend Next.js.
 
