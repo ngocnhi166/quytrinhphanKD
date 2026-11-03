@@ -20,7 +20,6 @@ export default function Login({ onLogin }: { onLogin: (user: User) => void }) {
   return <div className="login">
     <form className="card login-card" onSubmit={submit}>
       <div className="brand"><BrandMark/><span>SCOPE <b>T12</b><small>DATA ANALYSIS WORKSPACE</small></span></div>
-      <h1>Đăng nhập</h1>
       {error && <p className="alert error" role="alert">{error}</p>}
       <label className="field">Tên đăng nhập<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" autoFocus/></label>
       <label className="field">Mật khẩu<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password"/></label>
