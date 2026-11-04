@@ -38,7 +38,8 @@ def render_pdf(body_html):
                           "content=\"default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:\">"
                           f"<style>{STYLE}</style></head><body>{body_html}</body></html>", encoding="utf-8")
         try:
-            subprocess.run([exe, "--headless=new", "--disable-gpu", "--no-pdf-header-footer", f"--user-data-dir={folder / 'profile'}",
+            container_flags = ["--no-sandbox", "--disable-dev-shm-usage"] if os.name != "nt" else []
+            subprocess.run([exe, *container_flags, "--headless=new", "--disable-gpu", "--no-pdf-header-footer", f"--user-data-dir={folder / 'profile'}",
                             f"--print-to-pdf={out}", source.as_uri()], capture_output=True, timeout=60)
         except subprocess.TimeoutExpired:
             raise HTTPException(504, "Tạo PDF quá thời gian, hãy thử lại.")

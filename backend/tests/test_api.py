@@ -206,10 +206,12 @@ class AccessTests(Base):
         self.assertEqual(emp2.get(f"/api/tasks/{task}").status_code, 403)
         self.assertEqual(emp2.put(f"/api/tasks/{task}/result", json={"run_id": "x"}).status_code, 403)
         self.assertEqual(emp2.post("/api/search", json={"prompt": "x", "task_id": task}).status_code, 409)  # no extension, checked first
-        self.assertEqual([t["id"] for t in boss.get("/api/tasks").json()], [task])
+        self.assertEqual(boss.get("/api/tasks").json(), [])
         self.assertEqual(fin.get("/api/tasks").json(), [])
         self.assertEqual(fin.get(f"/api/tasks/{task}").status_code, 403)
         self.assertEqual(self.emp.put(f"/api/tasks/{task}/result", json={"run_id": self.finished_run(task, "Kết luận")}).status_code, 200)
+        self.assertEqual(self.emp.post(f"/api/tasks/{task}/submit").status_code, 200)
+        self.assertEqual([t["id"] for t in boss.get("/api/tasks").json()], [task])
         self.assertEqual(boss.get(f"/api/tasks/{task}").json()["result"], "Kết luận")
         self.assertEqual(self.admin.get(f"/api/tasks/{task}").status_code, 403)
 
@@ -272,9 +274,9 @@ class AccessTests(Base):
         self.assertEqual(self.emp.post(f"/api/tasks/{task}/submit").status_code, 422)  # no run selected yet
         self.assertEqual(self.emp.put(result, json={"run_id": self.finished_run(self.make_task(), "Tác vụ khác")}).status_code, 422)
         self.assertEqual(self.emp.put(result, json={"run_id": message["id"]}).status_code, 200)
-        chosen = boss.get(f"/api/tasks/{task}").json()
+        chosen = self.emp.get(f"/api/tasks/{task}").json()
         self.assertEqual((chosen["selected_run_id"], chosen["result"], chosen["result_html"]), (message["id"], "Doanh thu 300 (đã kiểm tra)", "<h2>Doanh thu 300 (đã kiểm tra)</h2>"))
-        self.assertEqual(boss.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": True}).status_code, 409)  # not submitted
+        self.assertEqual(boss.post(f"/api/tasks/{task}/review", json={"status": "approved", "confirmed": True}).status_code, 403)  # not visible before submission
         self.assertEqual(self.emp.post(f"/api/tasks/{task}/submit").status_code, 200)
         self.assertEqual(self.emp.put(result, json={"run_id": message["id"]}).status_code, 409)
         self.assertEqual(self.emp.patch(edit, json={"result": "đổi sau khi nộp"}).status_code, 409)

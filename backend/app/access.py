@@ -86,7 +86,7 @@ def login(body: Login, response: Response):
     username = body.username.strip().lower()
     with connection() as db:
         failures = db.execute("SELECT COUNT(*) FROM audit WHERE action='login_failed' AND target=? AND at>?", (username, time.time() - 900)).fetchone()[0]
-        row = db.execute("SELECT * FROM users WHERE username=? COLLATE NOCASE", (username,)).fetchone()
+        row = db.execute("SELECT * FROM users WHERE LOWER(username)=LOWER(?)", (username,)).fetchone()
     if failures >= 5:
         raise HTTPException(429, "Đăng nhập sai quá 5 lần. Thử lại sau 15 phút.")
     if not verify_password(body.password, row["password"] if row else DUMMY_HASH) or not row:
@@ -157,7 +157,7 @@ def users(admin=Depends(allow("admin"))):
 def create_user(body: NewUser, admin=Depends(allow("admin"))):
     with connection() as db:
         db.execute("BEGIN IMMEDIATE")
-        if db.execute("SELECT 1 FROM users WHERE username=? COLLATE NOCASE", (body.username,)).fetchone():
+        if db.execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)", (body.username,)).fetchone():
             raise HTTPException(409, "Tên đăng nhập đã tồn tại (không phân biệt chữ hoa, chữ thường).")
         department = checked_department(db, body.role, body.department_id)
         try:
@@ -411,8 +411,8 @@ def delete_task(task_id: str, request: Request, user=Depends(allow("employee")))
         task = workable_task(db, user, task_id, request)
         if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status IN ('queued','running')", (task_id,)).fetchone():
             raise HTTPException(409, "Vui lòng chờ lượt phân tích hoàn tất trước khi xóa.")
-        db.execute("DELETE FROM tasks WHERE id=? AND assignee_id=? AND status=?", (task_id, user["id"], task["status"]))
-        if not db.execute("SELECT changes()").fetchone()[0]:
+        deleted = db.execute("DELETE FROM tasks WHERE id=? AND assignee_id=? AND status=?", (task_id, user["id"], task["status"]))
+        if not deleted.rowcount:
             raise HTTPException(409, "Tác vụ đã thay đổi. Vui lòng tải lại danh sách.")
         db.execute("DELETE FROM task_datasets WHERE task_id=?", (task_id,))
         db.execute("UPDATE jobs SET task_id=NULL WHERE task_id=?", (task_id,))

@@ -123,6 +123,8 @@ if public_url.hostname:
 backend_public_url = urlsplit(os.environ.get("SCOPE_BACKEND_PUBLIC_URL", ""))
 if backend_public_url.hostname:
     allowed_hosts.append(backend_public_url.hostname)
+if os.environ.get("RENDER_EXTERNAL_HOSTNAME"):
+    allowed_hosts.append(os.environ["RENDER_EXTERNAL_HOSTNAME"])
 
 app = FastAPI(title="T12 Local Analysis", lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
