@@ -10,6 +10,24 @@ from unittest.mock import patch
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_URL"), "Set TEST_DATABASE_URL to run PostgreSQL checks.")
 class PostgresTests(unittest.TestCase):
+    def test_connection_recovers_from_missing_pooled_schema(self):
+        import psycopg
+        from psycopg import sql
+        from backend.app import store
+
+        name = "scope_schema_check_" + uuid.uuid4().hex
+        raw = psycopg.connect(os.environ["TEST_DATABASE_URL"], row_factory=store.postgres_row)
+        try:
+            raw.execute(sql.SQL("CREATE TABLE {} (value INTEGER)").format(sql.Identifier("public", name)))
+            raw.execute(sql.SQL("INSERT INTO {} VALUES (1)").format(sql.Identifier("public", name)))
+            raw.execute("SET LOCAL search_path TO schema_that_does_not_exist")
+            with patch("psycopg.connect", return_value=raw):
+                adapted = store.PostgresConnection(os.environ["TEST_DATABASE_URL"])
+            self.assertEqual(adapted.execute(f'SELECT value FROM "{name}"').fetchone()[0], 1)
+        finally:
+            raw.rollback()
+            raw.close()
+
     def test_account_task_review_and_exports(self):
         import psycopg
         from psycopg import sql
@@ -24,7 +42,7 @@ class PostgresTests(unittest.TestCase):
 
         def isolated_init(instance, connection_url):
             original_init(instance, connection_url)
-            instance.conn.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
+            instance.conn.execute(sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(schema)))
 
         try:
             with tempfile.TemporaryDirectory() as folder, \

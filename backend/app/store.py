@@ -28,6 +28,9 @@ class PostgresConnection:
     def __init__(self, url):
         import psycopg
         self.conn = psycopg.connect(url, row_factory=postgres_row, connect_timeout=15)
+        # Neon pooled sessions can retain a previous client's search_path.
+        # Scope our schema selection to this transaction so it cannot leak.
+        self.conn.execute("SET LOCAL search_path TO public")
 
     def execute(self, sql, params=()):
         import psycopg
