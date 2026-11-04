@@ -18,7 +18,9 @@ async function setup(fail = false) {
   const chrome = {
     storage: { local: { get: async () => ({ token: 'test-token' }), set: async data => Object.assign(saved, data) }, session: { set: async () => {}, remove: async () => {} } },
     tabs: { query: async () => [{ id: 7, url: 'http://127.0.0.1:3000/' }], update: async id => focused.push(id), create: async options => { created.push(options); return { id: 42 }; }, get: async () => ({ status: 'complete', url: 'https://chatgpt.com/' }), remove: async id => removed.push(id), sendMessage: async () => fail === 'event' ? { started: true } : fail ? { error: 'Upload failed' } : { text: 'Analysis output' } },
-    scripting: { executeScript: async () => {} },
+    scripting: { executeScript: async options => options.world === 'MAIN'
+      ? [{ result: { token: 'auto-token', websocket_url: 'ws://127.0.0.1:8000/api/extension/bridge', user: 'Employee' } }]
+      : [] },
     runtime: { id: 'test', onMessage: { addListener: fn => { listener = fn; } }, onStartup: { addListener: noop }, onInstalled: { addListener: noop } },
     alarms: { clear: noop, create: noop, onAlarm: { addListener: noop } },
   };
@@ -27,6 +29,10 @@ async function setup(fail = false) {
   assert.equal(ws, undefined, 'must not auto-connect on startup');
   await new Promise(resolve => listener({ type: 'connect' }, { id: 'test' }, resolve));
   await new Promise(resolve => setImmediate(resolve));
+  ws.onopen();
+  assert.equal(sent.at(-1).type, 'authenticate');
+  sent.pop();
+  ws.onmessage({ data: JSON.stringify({ type: 'connected' }) });
   ws.onmessage({ data: JSON.stringify({ type: 'run', id: 'job-1', filename: 'sales.csv', file: 'YQ==', prompt: 'Analyze' }) });
   await new Promise(resolve => setImmediate(resolve));
   return { ws, removed, sent, created, focused, control: msg => new Promise(resolve => listener(msg, { id: 'test' }, resolve)), dispatch: (msg, tab = 42) => listener(msg, { id: 'test', tab: { id: tab } }, noop) };

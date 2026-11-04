@@ -52,16 +52,33 @@ def job_scope(user):
 
 
 class Bridge:
-    socket = None
-    active = None
-    lock = asyncio.Lock()
+    def __init__(self, user_id=None, session_token=None):
+        self.socket = None
+        self.active = None
+        self.lock = asyncio.Lock()
+        self.user_id = user_id
+        self.session_token = session_token
+
+    def valid(self):
+        if self.user_id is None:
+            return True
+        with connection() as db:
+            return bool(db.execute(
+                "SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.user_id=? AND s.expires>? AND u.active=1 AND u.role='employee'",
+                (self.session_token, self.user_id, time.time())).fetchone())
 
     async def pump(self):
         async with self.lock:
             if not self.socket or self.active:
                 return
+            if not self.valid():
+                await self.socket.close(code=1008)
+                return
             with connection() as db:
-                row = db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
+                if self.user_id is None:
+                    row = db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
+                else:
+                    row = db.execute("SELECT * FROM jobs WHERE status='queued' AND user_id=? ORDER BY created LIMIT 1", (self.user_id,)).fetchone()
             if not row:
                 return
             self.active = row["id"]
@@ -91,6 +108,17 @@ class Bridge:
 
 
 bridge = Bridge()
+user_bridges: dict[int, Bridge] = {}
+
+
+def connected_bridge(user):
+    personal = user_bridges.get(user["id"])
+    if personal and personal.socket and personal.valid():
+        return personal
+    # Retain the original single-user bridge for local installations.
+    if not os.environ.get("RENDER") and not os.environ.get("SCOPE_PUBLIC_ORIGIN") and bridge.socket:
+        return bridge
+    return None
 
 
 async def watchdog():
@@ -100,10 +128,11 @@ async def watchdog():
             stale = db.execute("SELECT id FROM jobs WHERE status IN ('queued','running') AND created < ?", (time.time() - 900,)).fetchall()
         for row in stale:
             update(row["id"], status="failed", error="Quá thời gian chờ 15 phút. Kiểm tra extension và thử lại.")
-            if bridge.active == row["id"]:
-                if bridge.socket:
-                    await bridge.socket.close(code=1011)
-                bridge.active = None
+            for current in [bridge, *list(user_bridges.values())]:
+                if current.active == row["id"]:
+                    if current.socket:
+                        await current.socket.close(code=1011)
+                    current.active = None
 
 
 @asynccontextmanager
@@ -154,7 +183,27 @@ def health():
 
 @app.get("/api/pairing")
 def pairing():
+    if PUBLIC_ORIGIN or os.environ.get("RENDER"):
+        raise HTTPException(403, "Hãy kết nối tiện ích từ tài khoản nhân viên trên website.")
     return {"token": BRIDGE_KEY}
+
+
+@app.get("/api/extension/status")
+def extension_status(user=Depends(allow("employee", "manager", "admin"))):
+    return {"connected": connected_bridge(user) is not None if user["role"] == "employee" else False}
+
+
+@app.post("/api/extension/pairing")
+def pair_employee(request: Request, user=Depends(allow("employee"))):
+    token = secrets.token_urlsafe(32)
+    session_token = access.session_key(request.cookies.get(access.COOKIE, ""))
+    with connection() as db:
+        db.execute("DELETE FROM bridge_tickets WHERE expires<? OR session_token=?", (time.time(), session_token))
+        db.execute("INSERT INTO bridge_tickets (token,user_id,session_token,expires) VALUES (?,?,?,?)",
+                   (access.session_key(token), user["id"], session_token, time.time() + 60))
+    host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+    endpoint = f"wss://{host}/api/extension/bridge" if host else "ws://127.0.0.1:8000/api/extension/bridge"
+    return {"token": token, "websocket_url": endpoint, "user": user["full_name"]}
 
 
 @app.get("/api/jobs")
@@ -286,13 +335,16 @@ def download_result(job_id: str, request: Request, user=Depends(allow("employee"
 
 async def start_job(user, task, name, raw, summary, prompt, source):
     # source records where the data came from (task sample "dataset", "upload", or None) for the run history.
+    current = connected_bridge(user)
+    if not current:
+        raise HTTPException(409, "Tiện ích đã ngắt kết nối. Hãy kết nối lại trước khi chạy.")
     job_id, now = str(uuid.uuid4()), time.time()
     with connection() as db:
         db.execute("INSERT INTO jobs (id,filename,status,prompt,summary,result,error,created,updated,raw,user_id,task_id,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, name, "queued", prompt, json.dumps(summary, ensure_ascii=False), None, None, now, now, raw, user["id"], task["id"], source))
         # A first run, or a rerun after G11 asked for revision, puts the task back in progress.
         db.execute("UPDATE tasks SET status='in_progress', updated=? WHERE id=? AND status IN ('ready_for_analysis','needs_revision')", (now, task["id"]))
     audit(user, "ai_run", task["title"], f"{name}: {prompt[:300]}")
-    await bridge.pump()
+    await current.pump()
     with connection() as db:
         return public(db.execute(f"{JOB_QUERY} WHERE j.id = ?", (job_id,)).fetchone())
 
@@ -317,7 +369,7 @@ async def run_data(task, file, dataset_id):
 async def create_job(request: Request, task_id: str = Form(...), prompt: str = Form(...), file: UploadFile | None = File(None), dataset_id: str | None = Form(None), user=Depends(allow("employee"))):
     if not prompt.strip() or len(prompt) > 12000:
         raise HTTPException(422, "Nhập yêu cầu phân tích từ 1 đến 12.000 ký tự.")
-    if not bridge.socket:
+    if not connected_bridge(user):
         raise HTTPException(409, "Extension chưa kết nối. Mở phần Kết nối để thiết lập.")
     task = run_task(request, user, task_id)
     name, raw, summary = await run_data(task, file, dataset_id)
@@ -334,7 +386,7 @@ async def simple_question(body: SimpleQuestion, request: Request, user=Depends(a
     prompt = body.prompt.strip()
     if not prompt:
         raise HTTPException(422, "Vui lòng nhập câu hỏi.")
-    if not bridge.socket:
+    if not connected_bridge(user):
         raise HTTPException(409, "Extension chưa kết nối.")
     task = run_task(request, user, body.task_id)
     summary = {"mode": "simple", "columns": [], "row_count": 0, "preview": [], "metrics": {}}
@@ -345,7 +397,7 @@ async def simple_question(body: SimpleQuestion, request: Request, user=Depends(a
 async def file_question(request: Request, task_id: str = Form(...), prompt: str = Form(...), file: UploadFile | None = File(None), dataset_id: str | None = Form(None), user=Depends(allow("employee"))):
     if not prompt.strip() or len(prompt) > 4000:
         raise HTTPException(422, "Nhập câu hỏi từ 1 đến 4.000 ký tự.")
-    if not bridge.socket:
+    if not connected_bridge(user):
         raise HTTPException(409, "Extension chưa kết nối.")
     task = run_task(request, user, task_id)
     name, raw, summary = await run_data(task, file, dataset_id)
@@ -355,6 +407,9 @@ async def file_question(request: Request, task_id: str = Form(...), prompt: str 
 
 @app.websocket("/api/bridge")
 async def websocket(socket: WebSocket):
+    if PUBLIC_ORIGIN or os.environ.get("RENDER"):
+        await socket.close(code=1008)
+        return
     if not secrets.compare_digest(socket.query_params.get("token", ""), BRIDGE_KEY):
         await socket.close(code=1008)
         return
@@ -363,36 +418,81 @@ async def websocket(socket: WebSocket):
         await socket.close(code=1008, reason="Một extension đã kết nối.")
         return
     bridge.socket = socket
+    await receive_bridge(socket, bridge)
+
+
+@app.websocket("/api/extension/bridge")
+async def employee_websocket(socket: WebSocket):
+    await socket.accept()
     try:
-        await bridge.pump()
+        auth = await asyncio.wait_for(socket.receive_json(), timeout=10)
+        token = auth.get("token")
+        if auth.get("type") != "authenticate" or not isinstance(token, str) or len(token) > 200:
+            await socket.close(code=1008)
+            return
+        with connection() as db:
+            ticket = db.execute("DELETE FROM bridge_tickets WHERE token=? AND expires>? RETURNING user_id,session_token",
+                                (access.session_key(token), time.time())).fetchone()
+        if not ticket:
+            await socket.close(code=1008, reason="Kết nối đã hết hạn. Mở website và kết nối lại.")
+            return
+        current = Bridge(ticket["user_id"], ticket["session_token"])
+        if not current.valid():
+            await socket.close(code=1008, reason="Hãy đăng nhập lại trên website.")
+            return
+        if current.user_id in user_bridges and user_bridges[current.user_id].socket:
+            await socket.close(code=1008, reason="Tài khoản đã kết nối trên một trình duyệt khác.")
+            return
+        user_bridges[current.user_id] = current
+        current.socket = socket
+        await receive_bridge(socket, current)
+    except WebSocketDisconnect:
+        pass
+    except (asyncio.TimeoutError, ValueError):
+        await socket.close(code=1008)
+
+
+async def receive_bridge(socket: WebSocket, current: Bridge):
+    try:
+        if current.user_id is not None:
+            await socket.send_json({"type": "connected"})
+        await current.pump()
         while True:
             msg = await socket.receive_json()
+            if not current.valid():
+                await socket.close(code=1008, reason="Phiên đăng nhập đã hết hạn. Hãy kết nối lại.")
+                break
             if msg.get("type") == "ping":
                 await socket.send_json({"type": "pong"})
                 continue
-            if msg.get("type") == "progress" and msg.get("id") == bridge.active:
+            if current.active and msg.get("type") == "progress" and msg.get("id") == current.active:
                 text = msg.get("text")
                 if isinstance(text, str) and text.strip() and len(text) <= 500000:
-                    update(bridge.active, result=text)
+                    update(current.active, result=text)
                 continue
-            if msg.get("type") == "result" and msg.get("id") == bridge.active:
+            if current.active and msg.get("type") == "result" and msg.get("id") == current.active:
                 text, error = msg.get("text"), msg.get("error")
                 if isinstance(text, str) and text.strip() and len(text) <= 500000 and not error:
                     html = msg.get("html")
                     if not isinstance(html, str) or len(html) > 2000000:
                         html = None
                     warning = str(msg.get("html_error") or "")[:1000]
-                    update(bridge.active, status="succeeded", result=text, result_html=html, error=("Đã nhận nội dung nhưng chưa giữ được định dạng: " + warning) if warning else None)
+                    update(current.active, status="succeeded", result=text, result_html=html, error=("Đã nhận nội dung nhưng chưa giữ được định dạng: " + warning) if warning else None)
                 else:
-                    update(bridge.active, status="failed", error=str(error or "ChatGPT không trả về văn bản hợp lệ.")[:2000])
-                await socket.send_json({"type": "saved", "id": bridge.active})
-                bridge.active = None
-                await bridge.pump()
+                    update(current.active, status="failed", error=str(error or "ChatGPT không trả về văn bản hợp lệ.")[:2000])
+                await socket.send_json({"type": "saved", "id": current.active})
+                current.active = None
+                await current.pump()
     except (WebSocketDisconnect, RuntimeError, ValueError):
         pass
     finally:
-        if bridge.socket is socket:
-            bridge.socket = None
-            if bridge.active:
-                update(bridge.active, status="failed", error="Extension ngắt kết nối. Lượt chạy không tự gửi lại để tránh gửi trùng.")
-                bridge.active = None
+        if current.socket is socket:
+            current.socket = None
+            if current.user_id is not None:
+                user_bridges.pop(current.user_id, None)
+                with connection() as db:
+                    db.execute("UPDATE jobs SET status='failed', error=?, updated=? WHERE user_id=? AND status IN ('queued','running')",
+                               ("Tiện ích đã ngắt kết nối. Hãy kết nối lại và tạo lượt mới.", time.time(), current.user_id))
+            elif current.active:
+                update(current.active, status="failed", error="Extension ngắt kết nối. Lượt chạy không tự gửi lại để tránh gửi trùng.")
+            current.active = None

@@ -1,7 +1,15 @@
 <!doctype html>
-<html lang="vi"><meta charset="utf-8"><title>T12 Studio</title>
-<style>body{width:310px;padding:22px;font:14px/1.6 system-ui;color:#203b34;background:#f7faf8}h2{margin:0}p{color:#64776d}input,button{box-sizing:border-box;width:100%;padding:12px;border:1px solid #ccd9d0;border-radius:9px}button{background:#275b48;color:white;margin:12px 0;cursor:pointer}#status{font-size:12px}</style>
-<h2>✳ T12 Studio</h2><p>Bấm Mở tool để sử dụng. Bấm Đóng tool để ngắt kết nối và dừng lượt đang chạy. Không cần nhập mã.</p>
-<button id="connect">Mở tool</button><button id="disconnect">Đóng tool</button><div id="status" role="status">Đang kiểm tra…</div>
+<html lang="vi"><meta charset="utf-8"><title>SCOPE T12</title>
+<style>
+body{width:330px;margin:0;padding:22px;box-sizing:border-box;font:14px/1.6 system-ui;color:#edf4ff;background:#101d2e}
+h2{margin:0 0 10px;font-size:22px}p{color:#b4c8e3;margin:0 0 16px}
+button{box-sizing:border-box;width:100%;padding:11px 14px;border:1px solid #385472;border-radius:8px;background:#245dae;color:white;margin:6px 0;cursor:pointer;font:inherit}
+#disconnect,#diagnose{background:#1c3049}button:disabled{opacity:.55;cursor:wait}button:focus-visible,a:focus-visible{outline:2px solid #91c4ff;outline-offset:3px}
+#status{font-size:13px;margin:12px 0;color:#b9d8ff}a{color:#91c4ff}
+</style>
+<h2>SCOPE T12</h2>
+<p>Đăng nhập tài khoản nhân viên trên <a href="https://scope-t12.vercel.app/" target="_blank" rel="noreferrer">SCOPE T12</a>, rồi kết nối. AI sử dụng ChatGPT đang đăng nhập trong trình duyệt này.</p>
+<button id="connect">Kết nối</button><button id="disconnect">Ngắt kết nối</button>
+<div id="status" role="status">Đang kiểm tra…</div>
 <button id="diagnose">Kiểm tra tab ChatGPT đang mở</button><textarea id="diagnostic" readonly hidden style="width:100%;height:160px" aria-label="Thông tin chẩn đoán"></textarea><a id="download-report" hidden>Tải thông tin chẩn đoán</a>
 <script src="popup.js"></script></html>

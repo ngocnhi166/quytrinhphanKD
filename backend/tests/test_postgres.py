@@ -50,6 +50,13 @@ class PostgresTests(unittest.TestCase):
                     created = employee.post("/api/tasks", json={"title": "PG report", "objective": "Verify persistence", "requirements": ""})
                     self.assertEqual(created.status_code, 201, created.text)
                     task_id = created.json()["id"]
+                    ticket = employee.post("/api/extension/pairing")
+                    self.assertEqual(ticket.status_code, 200)
+                    with employee.websocket_connect("/api/extension/bridge") as socket:
+                        socket.send_json({"type": "authenticate", "token": ticket.json()["token"]})
+                        self.assertEqual(socket.receive_json(), {"type": "connected"})
+                        self.assertTrue(employee.get("/api/extension/status").json()["connected"])
+                        self.assertFalse(manager.get("/api/extension/status").json()["connected"])
                     user_id = employee.get("/api/me").json()["id"]
                     run_id = str(uuid.uuid4())
                     with store.connection() as db:

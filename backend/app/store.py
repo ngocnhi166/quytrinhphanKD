@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, filename TEXT, status TEXT
 CREATE TABLE IF NOT EXISTS departments (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, created REAL);
 CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL, department_id INTEGER REFERENCES departments(id), active INTEGER NOT NULL DEFAULT 1, created REAL);
 CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS bridge_tickets (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, session_token TEXT NOT NULL, expires REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS datasets (id TEXT PRIMARY KEY, filename TEXT, summary TEXT, raw BLOB, created_by INTEGER, created REAL);
 CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT, objective TEXT, requirements TEXT, department_id INTEGER, assignee_id INTEGER, status TEXT, result TEXT, review_note TEXT, reviewed_by INTEGER, created_by INTEGER, created REAL, updated REAL, submitted REAL, reviewed REAL);
 CREATE TABLE IF NOT EXISTS hidden_history (user_id INTEGER NOT NULL, job_id TEXT NOT NULL, PRIMARY KEY(user_id, job_id));

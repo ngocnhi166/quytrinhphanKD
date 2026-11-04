@@ -82,12 +82,16 @@ export default function Home() {
   const [taskId, setTaskId] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     try {
-      const health = await api<{ extension_connected: boolean }>("/health");
-      setOnline(true); setConnected(health.extension_connected);
+      await api("/health");
+      setOnline(true);
     } catch { setOnline(false); setConnected(false); }
     // An expired, revoked or locked session drops back to the login screen.
-    try { setUser(await api<User>("/me")); }
-    catch (e) { if (e instanceof ApiError && e.status === 401) setUser(null); }
+    try {
+      setUser(await api<User>("/me"));
+      const extension = await api<{ connected: boolean }>("/extension/status");
+      setConnected(extension.connected);
+    }
+    catch (e) { setConnected(false); if (e instanceof ApiError && e.status === 401) setUser(null); }
     setChecked(true);
   }, []);
   usePolling(refresh, 5000);
@@ -135,7 +139,7 @@ export default function Home() {
         {current === "users" && <Accounts me={user}/>}
         {current === "datasets" && <Datasets canManage={user.role === "admin"}/>}
         {current === "audit" && <AuditLog/>}
-        {current === "connect" && <div className="setup-grid"><section className="card setup-card"><h2>Kết nối ChatGPT của bạn</h2><p>Chạy backend tại cổng 8000, website tại cổng 3000.</p><ol><li><b>Mở Chrome hoặc Edge</b><p>Dùng đúng hồ sơ trình duyệt đã đăng nhập tại <a href="https://chatgpt.com" target="_blank" rel="noreferrer">chatgpt.com ↗</a>.</p></li><li><b>Cài extension của dự án</b><p>Vào trang quản lý tiện ích → bật Chế độ nhà phát triển → Tải tiện ích đã giải nén → chọn thư mục <code>extension</code> trong dự án.</p></li><li><b>Mở và đóng tool</b><p>Khởi động backend, mở tiện ích T12 Studio rồi bấm Mở tool. Bấm Đóng tool khi ngừng sử dụng. Không cần nhập mã.</p></li></ol></section><section className="card setup-card"><span className="setup-icon"><Icon name="link" size={30}/></span><h2>Trạng thái kết nối</h2><div className="health-row">Backend FastAPI <span className={`status ${online ? "succeeded" : "failed"}`}>{online ? "Đang chạy" : "Chưa chạy"}</span></div><div className="health-row">Extension <span className={`status ${connected ? "succeeded" : "failed"}`}>{connected ? "Đã kết nối" : "Chưa kết nối"}</span></div><p className="setup-tip">Kết nối extension không đồng nghĩa đã đăng nhập ChatGPT. Hãy kiểm tra tài khoản trong trình duyệt trước khi chạy.</p><p className="fine-print">Tệp được gửi lên ChatGPT để xử lý. Đóng tab không xóa cuộc hội thoại. Khi gặp lỗi, tab được giữ lại để kiểm tra.</p><button className="primary" onClick={() => go(nav[0].key)}>Về không gian làm việc <Icon name="arrow"/></button></section></div>}
+        {current === "connect" && <div className="setup-grid"><section className="card setup-card"><h2>Kết nối ChatGPT của bạn</h2><ol><li><b>Mở Chrome hoặc Edge</b><p>Dùng đúng hồ sơ trình duyệt đã đăng nhập tại <a href="https://chatgpt.com" target="_blank" rel="noreferrer">chatgpt.com ↗</a>.</p></li><li><b>Cài tiện ích SCOPE T12</b><p>Vào trang quản lý tiện ích → bật Chế độ nhà phát triển → Tải tiện ích đã giải nén → chọn thư mục <code>extension</code> trong dự án.</p></li><li><b>Kết nối tài khoản nhân viên</b><p>Giữ trang SCOPE T12 đang đăng nhập, mở tiện ích SCOPE T12 và bấm Kết nối. Tên tài khoản của bạn sẽ xuất hiện khi kết nối thành công.</p></li></ol></section><section className="card setup-card"><span className="setup-icon"><Icon name="link" size={30}/></span><h2>Trạng thái kết nối</h2><div className="health-row">Máy chủ <span className={`status ${online ? "succeeded" : "failed"}`}>{online ? "Đang chạy" : "Chưa chạy"}</span></div><div className="health-row">Tiện ích của bạn <span className={`status ${connected ? "succeeded" : "failed"}`}>{connected ? "Đã kết nối" : "Chưa kết nối"}</span></div><p className="setup-tip">Kết nối extension không đồng nghĩa đã đăng nhập ChatGPT. Hãy kiểm tra tài khoản trong trình duyệt trước khi chạy.</p><p className="fine-print">Tệp được gửi lên ChatGPT để xử lý. Đóng tab không xóa cuộc hội thoại. Khi gặp lỗi, tab được giữ lại để kiểm tra.</p><button className="primary" onClick={() => go(nav[0].key)}>Về không gian làm việc <Icon name="arrow"/></button></section></div>}
       </main>
     </div>
   </div>;

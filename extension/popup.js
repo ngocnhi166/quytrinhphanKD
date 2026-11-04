@@ -30,8 +30,13 @@ chrome.storage.local.get(["token", "status"]).then(data => {
 });
 chrome.storage.onChanged.addListener(changes => { if (changes.status) status.textContent = changes.status.newValue; });
 document.querySelector("#connect").addEventListener("click", async () => {
-  const result = await chrome.runtime.sendMessage({ type: "connect" });
-  if (result?.error) status.textContent = result.error;
+  const button = document.querySelector("#connect");
+  button.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "connect" });
+    if (result?.error) status.textContent = result.error;
+  } catch { status.textContent = "Hãy tải lại tiện ích rồi kết nối lại."; }
+  finally { button.disabled = false; }
 });
 document.querySelector("#disconnect").addEventListener("click", async () => {
   const result = await chrome.runtime.sendMessage({ type: "disconnect" });

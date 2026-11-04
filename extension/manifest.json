@@ -1,11 +1,28 @@
 {
   "manifest_version": 3,
-  "name": "T12 Studio — ChatGPT Local Bridge",
-  "version": "1.0.15",
+  "name": "SCOPE T12 — Kết nối ChatGPT",
+  "version": "1.1.0",
   "minimum_chrome_version": "116",
-  "description": "Nhận CSV/XLSX và yêu cầu phân tích từ T12 Studio, xử lý trong tab ChatGPT của bạn.",
-  "permissions": ["tabs", "scripting", "storage", "alarms"],
-  "host_permissions": ["https://chatgpt.com/*", "http://127.0.0.1:8000/*"],
-  "background": {"service_worker": "background.js"},
-  "action": {"default_popup": "popup.html", "default_title": "Kết nối T12 Studio"}
+  "description": "Kết nối AI Agent với tài khoản SCOPE T12 và ChatGPT của riêng bạn.",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://scope-t12.vercel.app/*",
+    "https://scope-t12-backend.onrender.com/*",
+    "http://127.0.0.1:8000/*",
+    "http://127.0.0.1:3000/*",
+    "http://localhost:3000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "SCOPE T12 — Kết nối ChatGPT"
+  }
 }
