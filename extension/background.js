@@ -49,16 +49,19 @@ async function connect() {
       if (current.readyState === WebSocket.OPEN) current.send(JSON.stringify({ type: "ping" }));
     }, 20000);
   };
+  let messages = Promise.resolve();
   current.onmessage = event => {
-    if (socket !== current || attempt !== generation) return;
-    const msg = JSON.parse(event.data);
-    if (msg.type === "connected") {
-      authenticated = true;
-      clearTimeout(authTimeout);
-      status(`Đã kết nối · ${pairing.user}`);
-    }
-    if (msg.type === "run" && authenticated) run(msg);
-    if (msg.type === "saved" && active?.id === msg.id) finish();
+    messages = messages.then(async () => {
+      if (socket !== current || attempt !== generation) return;
+      const msg = JSON.parse(event.data);
+      if (msg.type === "connected") {
+        authenticated = true;
+        clearTimeout(authTimeout);
+        await status(`Đã kết nối · ${pairing.user}`);
+      }
+      if (msg.type === "run" && authenticated) await run(msg);
+      if (msg.type === "saved" && active?.id === msg.id) await finish();
+    }).catch(() => current.close());
   };
   current.onclose = event => {
     clearTimeout(authTimeout);

@@ -87,3 +87,12 @@ test('close tool disconnects and closes only its owned processing tab', async ()
   assert.equal(ws.closed, true);
   assert.deepEqual(removed, [42]);
 });
+
+test('finishes cleanup before accepting the next queued run', async () => {
+  const { ws, created, sent } = await setup();
+  ws.onmessage({ data: JSON.stringify({ type: 'saved', id: 'job-1' }) });
+  ws.onmessage({ data: JSON.stringify({ type: 'run', id: 'job-2', filename: 'second.csv', file: 'YQ==', prompt: 'Analyze next' }) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(created.length, 2);
+  assert.equal(sent.at(-1).id, 'job-2');
+});
