@@ -5,6 +5,8 @@ import secrets
 import time
 import uuid
 import re
+import os
+from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
 from html import escape
 
@@ -111,8 +113,19 @@ async def lifespan(app):
     task.cancel()
 
 
+PUBLIC_ORIGIN = os.environ.get("SCOPE_PUBLIC_ORIGIN", "").rstrip("/")
+public_url = urlsplit(PUBLIC_ORIGIN)
+if PUBLIC_ORIGIN and (public_url.scheme != "https" or not public_url.hostname or public_url.path or public_url.query or public_url.fragment or public_url.username or public_url.password):
+    raise ValueError("SCOPE_PUBLIC_ORIGIN phải là địa chỉ HTTPS của website.")
+allowed_hosts = ["localhost", "127.0.0.1", "testserver"]
+if public_url.hostname:
+    allowed_hosts.append(public_url.hostname)
+backend_public_url = urlsplit(os.environ.get("SCOPE_BACKEND_PUBLIC_URL", ""))
+if backend_public_url.hostname:
+    allowed_hosts.append(backend_public_url.hostname)
+
 app = FastAPI(title="T12 Local Analysis", lifespan=lifespan)
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "testserver"])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 app.include_router(access.router)
 
 
@@ -120,7 +133,13 @@ app.include_router(access.router)
 async def local_origin(request: Request, call_next):
     origin = request.headers.get("origin")
     extension_pairing = request.url.path == "/api/pairing" and request.method == "GET" and bool(re.fullmatch(r"chrome-extension://[a-p]{32}", origin or ""))
-    if origin and origin not in {"http://localhost:3000", "http://127.0.0.1:3000"} and not extension_pairing:
+    allowed_origins = {"http://localhost:3000", "http://127.0.0.1:3000"}
+    if PUBLIC_ORIGIN:
+        allowed_origins.add(PUBLIC_ORIGIN)
+    if request.url.path == "/api/pairing" and (request.headers.get("x-forwarded-host") or request.headers.get("cf-ray")):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": "Chỉ ghép nối tiện ích trực tiếp trên máy chủ."}, status_code=403)
+    if origin and origin not in allowed_origins and not extension_pairing:
         from fastapi.responses import JSONResponse
         return JSONResponse({"detail": "Origin không được phép."}, status_code=403)
     return await call_next(request)
